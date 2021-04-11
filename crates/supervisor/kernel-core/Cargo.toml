@@ -1,0 +1,6 @@
+[package]
+name = "relic-kernel-core"
+version = "0.0.1"
+authors = ["Vinay Chandra Dommeti <relic@vinay.vc>"]
+edition = "2018"
+description = "Relic OS - Main Kernel Code"

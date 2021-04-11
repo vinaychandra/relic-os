@@ -1,0 +1,11 @@
+[package]
+name = "relic-sigma"
+version = "0.0.1"
+authors = ["Vinay Chandra Dommeti <relic@vinay.vc>"]
+edition = "2018"
+description = "Relic OS - Sigma Executable"
+
+[dependencies]
+relic-std = { path = "../../common/relic-std" }
+relic-abi = { path = "../../common/relic-abi" }
+relic-utils = { path = "../../common/relic-utils" }

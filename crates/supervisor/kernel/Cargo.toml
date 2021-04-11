@@ -1,0 +1,11 @@
+[package]
+name = "relic-kernel"
+version = "0.0.1"
+authors = ["Vinay Chandra Dommeti <relic@vinay.vc>"]
+edition = "2018"
+description = "Relic OS - Kernel entry point"
+
+[dependencies]
+relic-kernel-core = { path = "../kernel-core" }
+relic-abi = { path = "../../common/relic-abi" }
+relic-utils = { path = "../../common/relic-utils" }

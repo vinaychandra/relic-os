@@ -1,0 +1,53 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "make",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/"
+      }
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "make clean",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}/"
+      }
+    },
+    {
+      "label": "Launch QEMU (efi)",
+      "type": "shell",
+      "linux": {
+        "command": "(tmux kill-session -t osdev || $true) 2>  /dev/null && tmux new-session -d -s osdev && tmux send-keys 'make efi-wait' C-m"
+      },
+      "osx": {
+        "command": "(tmux kill-session -t osdev || $true) 2>  /dev/null && tmux new-session -d -s osdev && tmux send-keys 'make efi-wait' C-m"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/"
+      }
+    },
+    {
+      "label": "Close QEMU",
+      "type": "shell",
+      "linux": {
+        "command": "tmux kill-session -t osdev"
+      },
+      "osx": {
+        "command": "tmux kill-session -t osdev"
+      },
+      "options": {
+        "cwd": "${workspaceFolder}/"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
