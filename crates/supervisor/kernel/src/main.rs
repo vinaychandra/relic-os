@@ -1,8 +1,8 @@
 //! Relis OS - Kernel code.
 
-#![cfg_attr(not(test), no_std)]
+#![no_std]
 #![cfg_attr(test, allow(unused_imports))]
-#![no_main]
+#![cfg_attr(not(test), no_main)]
 
 extern crate core as std;
 

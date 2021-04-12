@@ -6,4 +6,6 @@ edition = "2018"
 description = "Relic OS - Main Kernel Code"
 
 [dependencies]
+relic-utils = { path = "../../common/relic-utils" }
+
 spin = "0.8"

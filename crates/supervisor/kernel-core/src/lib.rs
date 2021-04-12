@@ -5,6 +5,9 @@
 
 extern crate core as std;
 
+#[macro_use]
+extern crate relic_utils;
+
 /// Support for addresses.
 pub mod addr;
 

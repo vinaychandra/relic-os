@@ -1,4 +1,4 @@
-//! Managed Arc
+//! Managed Arc.
 //! This is different in the implementation of the standard library's arc
 //! in the sense that memory is considered freed once all strong references
 //! go out. This requires weak references to hold space in memory. This is
@@ -20,7 +20,7 @@ pub use rwlock::*;
 pub use weak_pool::*;
 
 /// A weak node (entry of a weak pool).
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct ManagedWeakNode {
     managed_arc_inner_ptr: PAddr,
     managed_arc_type_id: TypeId,
@@ -28,8 +28,48 @@ struct ManagedWeakNode {
     next_weak_node: Option<ManagedWeakAddr>,
 }
 
+impl Drop for ManagedWeakNode {
+    fn drop(&mut self) {
+        // Try locking the master
+        let mem_object: MemoryObject<ManagedArcInner<()>> =
+            unsafe { MemoryObject::new(self.managed_arc_inner_ptr) };
+        let mut first_weak = unsafe { mem_object.as_ref().first_weak.lock() };
+
+        // Update prev child.
+        if let Some(prev_weak_addr) = self.prev_weak_node {
+            let mut prev_obj = prev_weak_addr.get_object();
+            if let Some(prev_weak_node_data) = unsafe { prev_obj.as_mut() }.get_mut() {
+                debug_assert_eq!(
+                    self.managed_arc_type_id,
+                    prev_weak_node_data.managed_arc_type_id
+                );
+                prev_weak_node_data.next_weak_node = self.next_weak_node;
+            } else {
+                debug_panic!("Node must exist when there is a WeakNode addr pointed to it.")
+            }
+        } else {
+            // First child
+            *first_weak = self.next_weak_node;
+        }
+
+        // Update next child.
+        if let Some(next_weak_node_addr) = self.next_weak_node {
+            let mut obj = next_weak_node_addr.get_object();
+            if let Some(next_weak_node_data) = unsafe { obj.as_mut() }.get_mut() {
+                debug_assert_eq!(
+                    self.managed_arc_type_id,
+                    next_weak_node_data.managed_arc_type_id
+                );
+                next_weak_node_data.prev_weak_node = self.prev_weak_node;
+            } else {
+                debug_panic!("Node must exist when there is a WeakNode addr pointed to it.")
+            }
+        }
+    }
+}
+
 /// A weak address.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ManagedWeakAddr {
     weak_node_addr: PAddr,
 }
@@ -42,19 +82,36 @@ impl ManagedWeakAddr {
 
 /// Inner of an Arc, containing strong pointers and weak pointers
 /// information. Wrap the actual data.
+#[repr(C)]
 struct ManagedArcInner<T> {
     strong_count: Mutex<usize>,
-    first_weak: Option<ManagedWeakAddr>,
+    /// Pointer to the first weak reference. This also acts as a lock
+    /// to the double linked list for the weak pointers.
+    first_weak: Mutex<Option<ManagedWeakAddr>>,
     arced_data: T,
 }
 
 impl<T> Drop for ManagedArcInner<T> {
     fn drop(&mut self) {
-        let lead = self.strong_count.lock();
-        assert!(*lead == 0);
+        let strong_count = self.strong_count.lock();
+        assert!(*strong_count == 0);
 
-        // TODO drop all weak pointers
-        panic!("Trying to drop an inner!");
+        let first_weak_data = self.first_weak.lock();
+
+        let mut current_child_addr_option = *first_weak_data;
+        while let Some(current_child_addr) = current_child_addr_option {
+            let current_child_obj = current_child_addr.get_object();
+            let mut current_child_inner = unsafe { current_child_obj.as_ref() }.lock();
+
+            if let Some(current_child_data) = &*current_child_inner {
+                current_child_addr_option = current_child_data.next_weak_node;
+            } else {
+                debug_panic!("Node must exist when there is a WeakNode addr pointed to it.")
+            }
+
+            let inner = current_child_inner.take();
+            core::mem::forget(inner);
+        }
     }
 }
 
@@ -81,6 +138,13 @@ impl<T> Drop for ManagedArc<T> {
         let inner_obj_mut = unsafe { inner_obj.as_mut() };
         let mut strong_count = inner_obj_mut.strong_count.lock();
         *strong_count -= 1;
+
+        if *strong_count == 0 {
+            unsafe {
+                core::mem::drop(strong_count);
+                core::ptr::drop_in_place(inner_obj.as_ptr());
+            }
+        }
     }
 }
 
@@ -110,7 +174,7 @@ impl<T> ManagedArc<T> {
     }
 
     /// Create a managed Arc from a physical address.
-    pub unsafe fn from_ptr(arc_inner_ptr: PAddr) -> Self {
+    pub unsafe fn from_ptr(arc_inner_ptr: PAddr) -> Result<Self, ()> {
         let arc = ManagedArc {
             managed_arc_inner_ptr: arc_inner_ptr,
             _marker: PhantomData,
@@ -119,9 +183,12 @@ impl<T> ManagedArc<T> {
         let inner_obj = arc.read_object();
         let inner_ref = inner_obj.as_ref();
         let mut strong_count = inner_ref.strong_count.lock();
+        if *strong_count == 0 {
+            return Err(());
+        }
         *strong_count += 1;
 
-        arc
+        Ok(arc)
     }
 
     /// Create a managed Arc using the given data.
@@ -133,7 +200,7 @@ impl<T> ManagedArc<T> {
         let mut inner = arc.read_object();
         let data_to_write = ManagedArcInner {
             strong_count: Mutex::new(1),
-            first_weak: None,
+            first_weak: Mutex::new(None),
             arced_data: data,
         };
         ptr::write(inner.as_mut(), data_to_write);
@@ -156,8 +223,8 @@ impl<T> ManagedArc<T> {
     pub fn weak_count(&self) -> usize {
         let mut count = 0;
         let obj = self.read_object();
-        let first_obj = unsafe { obj.as_ref() };
-        let mut cur_addr = first_obj.first_weak;
+        let first_addr_lock = unsafe { obj.as_ref().first_weak.lock() };
+        let mut cur_addr = *first_addr_lock;
         loop {
             if let Some(next) = cur_addr {
                 count += 1;

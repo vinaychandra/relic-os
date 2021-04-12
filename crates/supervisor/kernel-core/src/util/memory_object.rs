@@ -1,3 +1,4 @@
+//! Utility to read physical memory as objects.
 use std::{
     fmt,
     marker::Unsize,

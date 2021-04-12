@@ -4,3 +4,6 @@ extern crate core as std;
 
 /// Align support functions.
 pub mod align;
+
+/// Utility macros
+pub mod macros;

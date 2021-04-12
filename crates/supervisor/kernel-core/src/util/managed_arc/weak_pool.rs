@@ -10,6 +10,7 @@ use crate::{
 use spin::Mutex;
 use std::{
     any::{Any, TypeId},
+    marker::PhantomData,
     ops::Deref,
     ptr,
 };
@@ -29,11 +30,12 @@ pub type ManagedWeakPool3Arc = ManagedArc<ManagedWeakPool<3>>;
 pub type ManagedWeakPool256Arc = ManagedArc<ManagedWeakPool<256>>;
 
 /// Guard for managed weak pool.
-struct ManagedWeakPoolGuard<T> {
+struct ManagedWeakPoolGuard<'a, T: 'a> {
+    _phantom: PhantomData<&'a ()>,
     arc_inner_object: MemoryObject<ManagedArcInner<T>>,
 }
 
-impl<T> Deref for ManagedWeakPoolGuard<T> {
+impl<'a, T: 'a> Deref for ManagedWeakPoolGuard<'a, T> {
     type Target = T;
     fn deref(&self) -> &T {
         unsafe { &self.arc_inner_object.as_ref().arced_data }
@@ -59,8 +61,9 @@ impl<const SIZE: usize> ManagedArc<ManagedWeakPool<SIZE>> {
     }
 
     /// Returns the guard to read the pool.
-    pub fn read(&self) -> impl Deref<Target = ManagedWeakPool<SIZE>> {
+    pub fn read(&self) -> impl Deref<Target = ManagedWeakPool<SIZE>> + '_ {
         ManagedWeakPoolGuard {
+            _phantom: PhantomData,
             arc_inner_object: self.read_object(),
         }
     }
@@ -95,7 +98,8 @@ impl<const SIZE: usize> ManagedWeakPool<SIZE> {
             if weak.managed_arc_type_id != TypeId::of::<ManagedArc<T>>() {
                 None
             } else {
-                Some(unsafe { ManagedArc::<T>::from_ptr(weak.managed_arc_inner_ptr) })
+                let inner = unsafe { ManagedArc::<T>::from_ptr(weak.managed_arc_inner_ptr) };
+                inner.ok()
             }
         })
     }
@@ -127,7 +131,7 @@ impl<const SIZE: usize> ManagedWeakPool<SIZE> {
         let mut arc_inner_obj = arc.read_object();
         let arc_inner = unsafe { arc_inner_obj.as_mut() };
 
-        let mut first_weak = arc_inner.first_weak;
+        let mut first_weak = arc_inner.first_weak.lock();
 
         if let Some(arc_second_weak_addr) = first_weak.take() {
             // ArcInner has weak. Insert the new weak as the first child.
@@ -142,7 +146,7 @@ impl<const SIZE: usize> ManagedWeakPool<SIZE> {
             new_weak_node.next_weak_node = Some(arc_second_weak_addr);
         }
 
-        arc_inner.first_weak = Some(new_weak_node_addr);
+        *first_weak = Some(new_weak_node_addr);
         *weak_node_at_given_index_option = Some(new_weak_node);
         Ok(())
     }
@@ -197,17 +201,16 @@ mod tests {
         {
             let a2_inner = arc2.read_object();
             let val = unsafe { a2_inner.as_ref() };
-            assert!(val.first_weak.is_some());
+            assert!(val.first_weak.lock().is_some());
         }
 
         mem::drop(arc1);
-        mem::drop(arc2);
 
         // any
         let value = unsafe {
             pool_data.upgrade_any(0, |a, b| {
                 assert_eq!(b, TypeId::of::<ManagedArc<u64>>());
-                Some(ManagedArc::<u64>::from_ptr(a).into())
+                Some(ManagedArc::<u64>::from_ptr(a).unwrap().into())
             })
         };
         assert!(value.is_some(), "Pool cannot find this.");
@@ -222,12 +225,17 @@ mod tests {
         // strong
         let value = pool_data.upgrade::<u64>(0);
         assert!(value.is_some(), "Pool cannot find this.");
-        let data = value.unwrap();
+        let arc3 = value.unwrap();
         {
-            let inner = data.read_object();
+            let inner = arc3.read_object();
             let obj = unsafe { inner.as_ref() };
             assert_eq!(999, obj.arced_data);
         }
+
+        mem::drop(arc2);
+        mem::drop(arc3);
+        let value = pool_data.upgrade::<u64>(0);
+        assert!(value.is_none(), "This value should have been dropped.");
     }
 
     #[test]
@@ -248,7 +256,6 @@ mod tests {
         assert_eq!(3, arc1.weak_count());
 
         mem::drop(arc1);
-        mem::drop(arc2);
 
         let assert_for_index = |index: usize| {
             let value = pool_data.upgrade::<u64>(index);
@@ -260,5 +267,54 @@ mod tests {
         assert_for_index(0);
         assert_for_index(1);
         assert_for_index(2);
+
+        mem::drop(arc2);
+        assert_eq!(None, *(*pool_data).pool_items[0].lock());
+        assert_eq!(None, *(*pool_data).pool_items[1].lock());
+        assert_eq!(None, *(*pool_data).pool_items[2].lock());
+    }
+
+    #[test]
+    fn test_managed_weak_object_drop() {
+        let boxed_pool1 = Box::new(MaybeUninit::<ManagedArcInner<ManagedWeakPool<3>>>::uninit());
+        let boxed_pool2 = Box::new(MaybeUninit::<ManagedArcInner<ManagedWeakPool<3>>>::uninit());
+        let boxed_addr1 = Box::into_raw(boxed_pool1) as u64;
+        let boxed_addr2 = Box::into_raw(boxed_pool2) as u64;
+        let addr1 = PAddr::new(boxed_addr1);
+        let addr2 = PAddr::new(boxed_addr2);
+
+        let pool1 = unsafe { ManagedWeakPool3Arc::create(addr1) };
+        let pool2 = unsafe { ManagedWeakPool3Arc::create(addr2) };
+        let arc1 = create_arc(999);
+        let arc2 = arc1.clone();
+        assert_eq!(0, arc1.weak_count());
+
+        let pool_data1 = pool1.read();
+        let pool_data2 = pool2.read();
+        pool_data1.downgrade_at(&arc1, 0).unwrap();
+        pool_data2.downgrade_at(&arc1, 1).unwrap();
+        pool_data1.downgrade_at(&arc2, 2).unwrap();
+        assert_eq!(3, arc1.weak_count());
+
+        mem::drop(arc1);
+
+        let assert_for_index = |pool_data: &ManagedWeakPool<3>, index: usize| {
+            let value = pool_data.upgrade::<u64>(index);
+            assert!(value.is_some(), "Pool cannot find this.");
+            let inner = value.unwrap().read_object();
+            let obj = unsafe { inner.as_ref() };
+            assert_eq!(999, obj.arced_data);
+        };
+        assert_for_index(&*pool_data1, 0);
+        assert_for_index(&*pool_data2, 1);
+        assert_for_index(&*pool_data1, 2);
+        assert_eq!(3, arc2.weak_count());
+
+        mem::drop(pool_data2);
+        mem::drop(pool2);
+
+        assert_for_index(&*pool_data1, 0);
+        assert_for_index(&*pool_data1, 2);
+        assert_eq!(2, arc2.weak_count());
     }
 }
