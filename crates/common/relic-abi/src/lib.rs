@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod caddr;
+pub mod cap;
 
 /// Prelude to re-upload commonly used items.
 pub mod prelude {
