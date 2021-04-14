@@ -9,3 +9,15 @@ description = "Relic OS - Kernel entry point"
 relic-kernel-core = { path = "../kernel-core" }
 relic-abi = { path = "../../common/relic-abi" }
 relic-utils = { path = "../../common/relic-utils" }
+
+acpi = "2.0.0"
+heapless = "0.6"
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
+spin = "0.8"
+static-alloc = "0.2.2"
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+apic = { git = "https://github.com/rust-osdev/apic", rev = "c662e70" }
+lazy_static = { version = "1", features = ["spin_no_std"] }
+uart_16550 = "0.2.10"
+x86_64 = "0.14"

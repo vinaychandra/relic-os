@@ -12,3 +12,5 @@ relic-abi = { path = "../../common/relic-abi" }
 spin = "0.8"
 bitflags = "1.2"
 getset = "0.1"
+
+log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }

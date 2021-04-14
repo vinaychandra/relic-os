@@ -131,3 +131,9 @@ impl PAddr {
         todo!()
     }
 }
+
+impl VAddr {
+    pub unsafe fn as_mut_ptr<T>(&self) -> &mut T {
+        &mut *(self.0 as *mut T)
+    }
+}

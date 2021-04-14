@@ -18,6 +18,8 @@ extern crate bitflags;
 #[macro_use]
 extern crate getset;
 
+extern crate log;
+
 /// Architecture level support.
 pub mod arch;
 
@@ -31,4 +33,6 @@ pub mod util;
 pub mod capability;
 
 /// Prelude to re-upload commonly used items.
-pub mod prelude {}
+pub mod prelude {
+    pub use crate::addr::*;
+}

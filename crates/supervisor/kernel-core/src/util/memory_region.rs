@@ -1,3 +1,5 @@
+use relic_utils::align;
+
 use crate::addr::PAddr;
 
 /// Represents a memory region with a start physical address and a
@@ -58,5 +60,19 @@ impl MemoryRegion {
             start_paddr,
             length,
         }
+    }
+
+    /// Allocate a memory region using the given length and
+    /// alignment. Shift the watermark of the current descriptor
+    /// passing over the allocated region.
+    pub fn try_allocate(&mut self, length: usize, alignment: usize) -> Option<PAddr> {
+        let paddr: PAddr = align::align_up(self.start_paddr.into(), alignment).into();
+        if paddr + length > self.start_paddr + self.length {
+            return None;
+        }
+
+        let new_addr = paddr + length;
+        self.move_up(new_addr);
+        Some(paddr)
     }
 }
