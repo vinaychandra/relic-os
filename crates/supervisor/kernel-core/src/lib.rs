@@ -2,6 +2,7 @@
 #![feature(asm)]
 #![feature(coerce_unsized)]
 #![feature(const_fn)]
+#![feature(dispatch_from_dyn)]
 #![feature(negative_impls)]
 #![feature(type_ascription)]
 #![feature(unsize)]
@@ -18,7 +19,6 @@ extern crate bitflags;
 extern crate getset;
 
 /// Architecture level support.
-#[macro_use]
 pub mod arch;
 
 /// Support for addresses.
@@ -31,6 +31,4 @@ pub mod util;
 pub mod capability;
 
 /// Prelude to re-upload commonly used items.
-pub mod prelude {
-    pub use crate::util::memory_object::MemoryObject;
-}
+pub mod prelude {}

@@ -92,6 +92,14 @@ unsafe impl Send for PAddr {}
 
 addr_common!(PAddr, PAddr);
 
+/// Represent a physical memory address in kernel address space.
+#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct PAddrGlobal(*const ());
+unsafe impl Sync for PAddrGlobal {}
+unsafe impl Send for PAddrGlobal {}
+
+addr_common!(PAddrGlobal, PAddrGlobal);
+
 /// Represent a virtual memory address in some address space.
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct VAddr(*const ());
@@ -99,3 +107,27 @@ unsafe impl Sync for VAddr {}
 unsafe impl Send for VAddr {}
 
 addr_common!(VAddr, VAddr);
+
+impl PAddrGlobal {
+    #[cfg(test)]
+    pub fn to_paddr(&self) -> PAddr {
+        PAddr(self.0)
+    }
+
+    #[cfg(not(test))]
+    pub fn to_paddr(&self) -> PAddr {
+        todo!()
+    }
+}
+
+impl PAddr {
+    #[cfg(test)]
+    pub fn to_paddr_global(&self) -> PAddrGlobal {
+        PAddrGlobal(self.0)
+    }
+
+    #[cfg(not(test))]
+    pub fn to_paddr_global(&self) -> PAddrGlobal {
+        todo!()
+    }
+}

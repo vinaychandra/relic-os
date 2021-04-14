@@ -36,18 +36,16 @@ impl<U> ManagedArc<RwLock<U>> {
     /// Read the value from the ManagedArc. Returns the guard.
     pub fn read(&self) -> ManagedArcRwLockReadGuard<U> {
         let inner_obj = self.read_object();
-        let inner = unsafe { &*inner_obj.as_ptr() };
         ManagedArcRwLockReadGuard {
-            lock: inner.arced_data.read(),
+            lock: inner_obj.arced_data.read(),
         }
     }
 
     /// Write to the ManagedArc. Returns the guard.
     pub fn write(&self) -> ManagedArcRwLockWriteGuard<U> {
         let inner_obj = self.read_object();
-        let inner = unsafe { &*inner_obj.as_ptr() };
         ManagedArcRwLockWriteGuard {
-            lock: inner.arced_data.write(),
+            lock: inner_obj.arced_data.write(),
         }
     }
 }
@@ -63,7 +61,7 @@ mod tests {
         let underlying_value: Box<MaybeUninit<ManagedArcInner<RwLock<u64>>>> =
             Box::new(MaybeUninit::uninit());
         let box_addr = Box::into_raw(underlying_value) as u64;
-        let addr = PAddr::new(box_addr);
+        let addr = PAddrGlobal::new(box_addr);
 
         let arc = unsafe { ManagedArc::new(addr, RwLock::new(5u64)) };
         assert_eq!(5, *arc.read());

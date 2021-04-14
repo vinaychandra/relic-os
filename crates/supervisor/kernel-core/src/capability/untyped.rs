@@ -1,24 +1,25 @@
+use std::mem;
+
 use relic_abi::cap::CapabilityErrors;
 use relic_utils::align;
 use spin::RwLock;
 
 use crate::{
-    addr::PAddr,
-    capability::drop_any,
+    addr::PAddrGlobal,
     util::managed_arc::{ManagedArc, ManagedArcAny},
 };
 
 /// Untyped memory descriptor. Represents a
 /// chunk of physical memory.
-#[derive(Debug, Getters)]
+#[derive(Getters)]
 pub struct UntypedDescriptor {
     /// Start physical address of the untyped region.
     #[getset(get = "pub")]
-    start_paddr: PAddr,
+    start_paddr: PAddrGlobal,
     /// Length of the untyped region.
     #[getset(get = "pub")]
     length: usize,
-    watermark: PAddr,
+    watermark: PAddrGlobal,
 
     first_child: Option<ManagedArcAny>,
 }
@@ -36,9 +37,9 @@ impl UntypedCap {
     ///
     /// Can only be used for free memory regions returned from
     /// `InitInfo`.
-    pub unsafe fn bootstrap(start_paddr: PAddr, length: usize) -> Self {
+    pub unsafe fn bootstrap(start_paddr: PAddrGlobal, length: usize) -> Self {
         let start_paddr_usize: usize = start_paddr.into();
-        let des_paddr: PAddr =
+        let des_paddr: PAddrGlobal =
             align::align_up(start_paddr_usize, UntypedCap::inner_type_alignment()).into();
         assert!(des_paddr + UntypedCap::inner_type_length() <= start_paddr + length);
 
@@ -62,8 +63,8 @@ impl UntypedDescriptor {
         &mut self,
         length: usize,
         alignment: usize,
-    ) -> Result<PAddr, CapabilityErrors> {
-        let paddr: PAddr = align::align_up(self.watermark.into(), alignment).into();
+    ) -> Result<PAddrGlobal, CapabilityErrors> {
+        let paddr: PAddrGlobal = align::align_up(self.watermark.into(), alignment).into();
         if paddr + length > self.start_paddr + self.length {
             return Err(CapabilityErrors::MemoryNotSufficient);
         }
@@ -85,7 +86,7 @@ impl UntypedDescriptor {
         f: F,
     ) -> Result<(), CapabilityErrors>
     where
-        F: FnOnce(PAddr, Option<ManagedArcAny>) -> ManagedArcAny,
+        F: FnOnce(PAddrGlobal, Option<ManagedArcAny>) -> ManagedArcAny,
     {
         let paddr = self.allocate(length, alignment)?;
         self.first_child = Some(f(paddr, self.first_child.take()));
@@ -96,7 +97,7 @@ impl UntypedDescriptor {
 impl Drop for UntypedDescriptor {
     fn drop(&mut self) {
         if let Some(child) = self.first_child.take() {
-            drop_any(child);
+            mem::drop(child)
         }
     }
 }
@@ -111,7 +112,7 @@ mod tests {
     fn test_untyped_memory() {
         let underlying_value: Box<MaybeUninit<[u64; 4096]>> = Box::new(MaybeUninit::uninit());
         let box_addr = Box::into_raw(underlying_value) as u64;
-        let addr = PAddr::new(box_addr);
+        let addr = PAddrGlobal::new(box_addr);
 
         let untyped_memory = unsafe { UntypedCap::bootstrap(addr, 4096) };
         {
@@ -122,7 +123,7 @@ mod tests {
                         assert!(b.is_none());
                         let child = UntypedCap::bootstrap(a, 100);
                         child.write().first_child = b;
-                        child.into()
+                        child
                     })
                     .unwrap();
 
@@ -139,7 +140,7 @@ mod tests {
                         assert!(b.is_some());
                         let child = UntypedCap::bootstrap(a, 100);
                         child.write().first_child = b;
-                        child.into()
+                        child
                     })
                     .unwrap();
             }

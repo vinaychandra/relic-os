@@ -1,19 +1,15 @@
 use relic_abi::{cap::CapabilityErrors, SetDefault};
 use spin::RwLock;
-use std::{any::Any, marker::PhantomData, mem};
+use std::{any::Any, marker::PhantomData, mem, ptr::NonNull};
 
 use crate::{
-    addr::PAddr,
+    addr::PAddrGlobal,
     arch::{
         capability::paging::page_cap::{PageCap, PageDescriptor},
         paging::BASE_PAGE_LENGTH,
     },
     capability::UntypedDescriptor,
-    prelude::MemoryObject,
-    util::{
-        managed_arc::ManagedWeakPool1Arc,
-        memory_object::{UniqueReadGuard, UniqueWriteGuard},
-    },
+    util::managed_arc::ManagedWeakPool1Arc,
 };
 
 /// Page length used in current kernel. This is `BASE_PAGE_LENGTH` in x86_64.
@@ -30,7 +26,7 @@ impl<T: SetDefault + Any> PageCap<T> {
     }
 
     pub unsafe fn bootstrap(
-        start_paddr: PAddr,
+        start_paddr: PAddrGlobal,
         untyped: &mut UntypedDescriptor,
     ) -> Result<Self, CapabilityErrors> {
         assert!(
@@ -60,7 +56,7 @@ impl<T: SetDefault + Any> PageCap<T> {
 
                 arc = Some(Self::new(paddr, RwLock::new(desc)));
 
-                arc.clone().unwrap().into()
+                arc.clone().unwrap()
             },
         )?;
 
@@ -73,7 +69,7 @@ impl<T: SetDefault + Any> PageCap<T> {
 }
 
 impl<T: SetDefault + Any> PageDescriptor<T> {
-    pub fn start_paddr(&self) -> PAddr {
+    pub fn start_paddr(&self) -> PAddrGlobal {
         self.start_paddr
     }
 
@@ -81,15 +77,16 @@ impl<T: SetDefault + Any> PageDescriptor<T> {
         BASE_PAGE_LENGTH
     }
 
-    fn page_object(&self) -> MemoryObject<T> {
-        unsafe { MemoryObject::new(self.start_paddr()) }
+    fn page_object(&self) -> NonNull<T> {
+        let addr: u64 = self.start_paddr.into();
+        NonNull::new(addr as _).unwrap()
     }
 
-    pub fn read(&self) -> UniqueReadGuard<T> {
-        unsafe { UniqueReadGuard::new(self.page_object()) }
+    pub fn read(&self) -> &T {
+        unsafe { self.page_object().as_ref() }
     }
 
-    pub fn write(&mut self) -> UniqueWriteGuard<T> {
-        unsafe { UniqueWriteGuard::new(self.page_object()) }
+    fn write(&mut self) -> &mut T {
+        unsafe { self.page_object().as_mut() }
     }
 }

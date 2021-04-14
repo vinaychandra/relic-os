@@ -1,19 +1,16 @@
-use std::{any::Any, marker::PhantomData};
+use std::{any::Any, marker::PhantomData, ptr::NonNull};
 
 use relic_abi::{cap::CapabilityErrors, SetDefault};
 use spin::RwLock;
 
 use crate::{
-    addr::PAddr,
+    addr::PAddrGlobal,
     arch::paging::{
         table::{PDEntry, PDPTEntry, PTEntry, PD, PDPT, PT},
         BASE_PAGE_LENGTH,
     },
     capability::UntypedDescriptor,
-    util::{
-        managed_arc::{ManagedArc, ManagedArcAny, ManagedWeakPool1Arc},
-        memory_object::{MemoryObject, UniqueReadGuard, UniqueWriteGuard},
-    },
+    util::managed_arc::{ManagedArc, ManagedArcAny, ManagedWeakPool1Arc},
 };
 
 /// Page length used in current kernel. This is `BASE_PAGE_LENGTH` in x86_64.
@@ -21,7 +18,7 @@ pub const PAGE_LENGTH: usize = BASE_PAGE_LENGTH;
 
 /// PML4 page table descriptor.
 pub struct PML4Descriptor {
-    pub(super) start_paddr: PAddr,
+    pub(super) start_paddr: PAddrGlobal,
     #[allow(dead_code)]
     pub(super) next: Option<ManagedArcAny>,
 }
@@ -32,7 +29,7 @@ pub type PML4Cap = ManagedArc<RwLock<PML4Descriptor>>;
 /// PDPT page table descriptor.
 pub struct PDPTDescriptor {
     pub(super) mapped_weak_pool: ManagedWeakPool1Arc,
-    start_paddr: PAddr,
+    start_paddr: PAddrGlobal,
     #[allow(dead_code)]
     next: Option<ManagedArcAny>,
 }
@@ -43,7 +40,7 @@ pub type PDPTCap = ManagedArc<RwLock<PDPTDescriptor>>;
 /// PD page table descriptor.
 pub struct PDDescriptor {
     mapped_weak_pool: ManagedWeakPool1Arc,
-    start_paddr: PAddr,
+    start_paddr: PAddrGlobal,
     #[allow(dead_code)]
     next: Option<ManagedArcAny>,
 }
@@ -54,7 +51,7 @@ pub type PDCap = ManagedArc<RwLock<PDDescriptor>>;
 /// PT page table descriptor.
 pub struct PTDescriptor {
     mapped_weak_pool: ManagedWeakPool1Arc,
-    start_paddr: PAddr,
+    start_paddr: PAddrGlobal,
     #[allow(dead_code)]
     next: Option<ManagedArcAny>,
 }
@@ -65,7 +62,7 @@ pub type PTCap = ManagedArc<RwLock<PTDescriptor>>;
 /// Page descriptor.
 pub struct PageDescriptor<T: SetDefault + Any> {
     pub(super) mapped_weak_pool: ManagedWeakPool1Arc,
-    pub(super) start_paddr: PAddr,
+    pub(super) start_paddr: PAddrGlobal,
     #[allow(dead_code)]
     pub(super) next: Option<ManagedArcAny>,
     pub(super) _marker: PhantomData<T>,
@@ -106,7 +103,7 @@ macro_rules! paging_cap {
 
                             arc = Some(Self::new(paddr, RwLock::new(desc)));
 
-                            arc.clone().unwrap().into()
+                            arc.clone().unwrap()
                         },
                     )?;
                 }
@@ -120,7 +117,7 @@ macro_rules! paging_cap {
                 sub: &$sub_cap,
             ) -> Result<(), CapabilityErrors> {
                 let mut current_desc = self.write();
-                let mut current = current_desc.write();
+                let current = current_desc.write();
                 let sub_desc = sub.read();
                 if current[index].is_present() {
                     return Err(CapabilityErrors::CapabilityAlreadyOccupied);
@@ -128,16 +125,15 @@ macro_rules! paging_cap {
 
                 sub_desc
                     .mapped_weak_pool
-                    .read()
-                    .downgrade_at(self, 0)
+                    .downgrade_at(self.clone(), 0)
                     .map_err(|_| CapabilityErrors::MemoryAlreadyMapped)?;
-                current[index] = $entry::new(sub_desc.start_paddr, $access);
+                current[index] = $entry::new(sub_desc.start_paddr.to_paddr(), $access);
                 Ok(())
             }
         }
 
         impl $desc {
-            pub fn start_paddr(&self) -> PAddr {
+            pub fn start_paddr(&self) -> PAddrGlobal {
                 self.start_paddr
             }
 
@@ -145,16 +141,17 @@ macro_rules! paging_cap {
                 BASE_PAGE_LENGTH
             }
 
-            fn page_object(&self) -> MemoryObject<$paging> {
-                unsafe { MemoryObject::new(self.start_paddr) }
+            fn page_object(&self) -> NonNull<$paging> {
+                let addr: u64 = self.start_paddr.into();
+                NonNull::new(addr as _).unwrap()
             }
 
-            pub fn read(&self) -> UniqueReadGuard<$paging> {
-                unsafe { UniqueReadGuard::new(self.page_object()) }
+            pub fn read(&self) -> &$paging {
+                unsafe { self.page_object().as_ref() }
             }
 
-            fn write(&mut self) -> UniqueWriteGuard<$paging> {
-                unsafe { UniqueWriteGuard::new(self.page_object()) }
+            fn write(&mut self) -> &mut $paging {
+                unsafe { self.page_object().as_mut() }
             }
         }
     };
@@ -210,7 +207,7 @@ impl PTCap {
 
                     arc = Some(Self::new(paddr, RwLock::new(desc)));
 
-                    arc.clone().unwrap().into()
+                    arc.clone().unwrap()
                 },
             )?;
         }
@@ -225,7 +222,7 @@ impl PTCap {
         sub: &PageCap<T>,
     ) -> Result<(), CapabilityErrors> {
         let mut current_desc = self.write();
-        let mut current = current_desc.write();
+        let current = current_desc.write();
         let sub_desc = sub.read();
         if current[index].is_present() {
             return Err(CapabilityErrors::CapabilityAlreadyOccupied);
@@ -233,11 +230,10 @@ impl PTCap {
 
         sub_desc
             .mapped_weak_pool
-            .read()
-            .downgrade_at(self, 0)
+            .downgrade_at(self.clone(), 0)
             .map_err(|_| CapabilityErrors::MemoryAlreadyMapped)?;
         current[index] = PTEntry::new(
-            sub_desc.start_paddr,
+            sub_desc.start_paddr.to_paddr(),
             PTEntry::PT_P | PTEntry::PT_RW | PTEntry::PT_US,
         );
 
@@ -246,7 +242,7 @@ impl PTCap {
 }
 
 impl PTDescriptor {
-    pub fn start_paddr(&self) -> PAddr {
+    pub fn start_paddr(&self) -> PAddrGlobal {
         self.start_paddr
     }
 
@@ -254,15 +250,16 @@ impl PTDescriptor {
         BASE_PAGE_LENGTH
     }
 
-    fn page_object(&self) -> MemoryObject<PT> {
-        unsafe { MemoryObject::new(self.start_paddr) }
+    fn page_object(&self) -> NonNull<PT> {
+        let addr: u64 = self.start_paddr.into();
+        NonNull::new(addr as _).unwrap()
     }
 
-    pub fn read(&self) -> UniqueReadGuard<PT> {
-        unsafe { UniqueReadGuard::new(self.page_object()) }
+    pub fn read(&self) -> &PT {
+        unsafe { self.page_object().as_ref() }
     }
 
-    fn write(&mut self) -> UniqueWriteGuard<PT> {
-        unsafe { UniqueWriteGuard::new(self.page_object()) }
+    fn write(&mut self) -> &mut PT {
+        unsafe { self.page_object().as_mut() }
     }
 }

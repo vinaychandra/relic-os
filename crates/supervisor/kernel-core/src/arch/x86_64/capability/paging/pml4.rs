@@ -1,10 +1,10 @@
-use std::any::Any;
+use std::{any::Any, mem, ptr::NonNull};
 
 use relic_abi::{cap::CapabilityErrors, SetDefault};
 use spin::RwLock;
 
 use crate::{
-    addr::{PAddr, VAddr},
+    addr::{PAddrGlobal, VAddr},
     arch::{
         capability::paging::page_cap::{PDCap, PDPTCap, PML4Cap, PML4Descriptor, PTCap, PageCap},
         paging::{
@@ -13,8 +13,6 @@ use crate::{
         },
     },
     capability::{CPoolDescriptor, UntypedDescriptor},
-    prelude::MemoryObject,
-    util::memory_object::{UniqueReadGuard, UniqueWriteGuard},
 };
 
 impl PML4Cap {
@@ -44,7 +42,7 @@ impl PML4Cap {
 
                     arc = Some(Self::new(paddr, RwLock::new(desc)));
 
-                    arc.clone().unwrap().into()
+                    arc.clone().unwrap()
                 },
             )?;
         }
@@ -54,7 +52,7 @@ impl PML4Cap {
 
     pub fn map_pdpt(&mut self, index: usize, sub: &PDPTCap) -> Result<(), CapabilityErrors> {
         let mut current_desc = self.write();
-        let mut current = current_desc.write();
+        let current = current_desc.write();
         let sub_desc = sub.read();
         // TODO vinay
         // assert!(!(pml4_index(VAddr::from(KERNEL_BASE)) == index));
@@ -64,11 +62,10 @@ impl PML4Cap {
 
         sub_desc
             .mapped_weak_pool
-            .read()
-            .downgrade_at(self, 0)
+            .downgrade_at(self.clone(), 0)
             .map_err(|_| CapabilityErrors::MemoryAlreadyMapped)?;
         current[index] = PML4Entry::new(
-            sub_desc.start_paddr(),
+            sub_desc.start_paddr().to_paddr(),
             PML4Entry::PML4_P | PML4Entry::PML4_RW | PML4Entry::PML4_US,
         );
 
@@ -87,7 +84,7 @@ impl PML4Cap {
 
             if !self.read().read()[index].is_present() {
                 let pdpt_cap = PDPTCap::retype_from(untyped)?;
-                cpool.downgrade_free(&pdpt_cap)?;
+                cpool.downgrade_free(pdpt_cap.clone())?;
                 self.map_pdpt(index, &pdpt_cap)?;
             }
 
@@ -98,9 +95,10 @@ impl PML4Cap {
                         if any.is::<PDPTCap>() {
                             let cap: PDPTCap = any.into();
                             let cap_desc = cap.read();
-                            cap_desc.start_paddr() == { self.read().read()[index] }.get_address()
+                            cap_desc.start_paddr()
+                                == self.read().read()[index].get_address().to_paddr_global()
                         } else {
-                            crate::capability::drop_any(any);
+                            mem::drop(any);
                             false
                         }
                     } else {
@@ -117,7 +115,7 @@ impl PML4Cap {
 
             if !pdpt_cap.read().read()[index].is_present() {
                 let pd_cap = PDCap::retype_from(untyped)?;
-                cpool.downgrade_free(&pd_cap)?;
+                cpool.downgrade_free(pd_cap.clone())?;
                 pdpt_cap.map_pd(index, &pd_cap)?;
             }
 
@@ -128,10 +126,12 @@ impl PML4Cap {
                         if any.is::<PDCap>() {
                             let cap: PDCap = any.into();
                             let cap_desc = cap.read();
-                            cap_desc.start_paddr() == { pdpt_cap.read().read()[index] }
-                                .get_address()
+                            cap_desc.start_paddr()
+                                == pdpt_cap.read().read()[index]
+                                    .get_address()
+                                    .to_paddr_global()
                         } else {
-                            crate::capability::drop_any(any);
+                            mem::drop(any);
                             false
                         }
                     } else {
@@ -148,7 +148,7 @@ impl PML4Cap {
 
             if !pd_cap.read().read()[index].is_present() {
                 let pt_cap = PTCap::retype_from(untyped)?;
-                cpool.downgrade_free(&pt_cap)?;
+                cpool.downgrade_free(pt_cap.clone())?;
                 pd_cap.map_pt(index, &pt_cap)?;
             }
 
@@ -159,9 +159,10 @@ impl PML4Cap {
                         if any.is::<PTCap>() {
                             let cap: PTCap = any.into();
                             let cap_desc = cap.read();
-                            cap_desc.start_paddr() == { pd_cap.read().read()[index] }.get_address()
+                            cap_desc.start_paddr()
+                                == pd_cap.read().read()[index].get_address().to_paddr_global()
                         } else {
-                            crate::capability::drop_any(any);
+                            mem::drop(any);
                             false
                         }
                     } else {
@@ -179,7 +180,7 @@ impl PML4Cap {
 }
 
 impl PML4Descriptor {
-    pub fn start_paddr(&self) -> PAddr {
+    pub fn start_paddr(&self) -> PAddrGlobal {
         self.start_paddr
     }
 
@@ -187,23 +188,24 @@ impl PML4Descriptor {
         BASE_PAGE_LENGTH
     }
 
-    fn page_object(&self) -> MemoryObject<PML4> {
-        unsafe { MemoryObject::new(self.start_paddr) }
+    fn page_object(&self) -> NonNull<PML4> {
+        let addr: u64 = self.start_paddr.into();
+        NonNull::new(addr as _).unwrap()
     }
 
-    pub fn read(&self) -> UniqueReadGuard<PML4> {
-        unsafe { UniqueReadGuard::new(self.page_object()) }
+    pub fn read(&self) -> &PML4 {
+        unsafe { self.page_object().as_ref() }
     }
 
-    fn write(&mut self) -> UniqueWriteGuard<PML4> {
-        unsafe { UniqueWriteGuard::new(self.page_object()) }
+    fn write(&mut self) -> &mut PML4 {
+        unsafe { self.page_object().as_mut() }
     }
 
     pub fn switch_to(&mut self) {
         use crate::arch::paging;
 
         unsafe {
-            paging::utils::switch_to(self.start_paddr);
+            paging::utils::switch_to(self.start_paddr.to_paddr());
         }
     }
 }
