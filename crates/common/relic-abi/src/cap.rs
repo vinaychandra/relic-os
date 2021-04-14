@@ -1,3 +1,5 @@
+use crate::SetDefault;
+
 /// Errors when using capabilities.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CapabilityErrors {
@@ -13,3 +15,19 @@ pub enum CapabilityErrors {
     /// Out of memory error.
     MemoryNotSufficient,
 }
+
+/// Represents a task buffer used for system calls.
+pub struct TaskBuffer {
+    pub call: Option<SystemCall>,
+    pub payload_length: usize,
+    pub payload_data: [u8; 1024],
+}
+
+impl SetDefault for TaskBuffer {
+    fn set_default(&mut self) {
+        self.call = None;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SystemCall {}
