@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    ops::{Add, AddAssign},
+    ops::{Add, AddAssign, Sub},
     ptr::NonNull,
 };
 
@@ -17,6 +17,28 @@ macro_rules! addr_common {
         impl AddAssign<usize> for $t {
             fn add_assign(&mut self, _rhs: usize) {
                 self.0 = ((self.0 as u64) + (_rhs as u64)) as _;
+            }
+        }
+
+        impl Add<u64> for $t {
+            type Output = Self;
+
+            fn add(self, _rhs: u64) -> Self {
+                Self::from(<Self as Into<u64>>::into(self) + _rhs)
+            }
+        }
+
+        impl AddAssign<u64> for $t {
+            fn add_assign(&mut self, _rhs: u64) {
+                self.0 = ((self.0 as u64) + (_rhs as u64)) as _;
+            }
+        }
+
+        impl Sub<Self> for $t {
+            type Output = u64;
+
+            fn sub(self, _rhs: Self) -> u64 {
+                <Self as Into<u64>>::into(self) - <$t as Into<u64>>::into(_rhs)
             }
         }
 
@@ -93,10 +115,18 @@ unsafe impl Send for PAddr {}
 addr_common!(PAddr, PAddr);
 
 /// Represent a physical memory address in kernel address space.
-#[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct PAddrGlobal(*const ());
 unsafe impl Sync for PAddrGlobal {}
 unsafe impl Send for PAddrGlobal {}
+
+impl core::fmt::Debug for PAddrGlobal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PAddrGlobal")
+            .field(&self.to_paddr())
+            .finish()
+    }
+}
 
 addr_common!(PAddrGlobal, PAddrGlobal);
 
@@ -116,7 +146,11 @@ impl PAddrGlobal {
 
     #[cfg(not(test))]
     pub fn to_paddr(&self) -> PAddr {
-        todo!()
+        PAddr(((self.0 as u64) - crate::arch::globals::MEM_MAP_OFFSET_LOCATION) as _)
+    }
+
+    pub unsafe fn as_mut_ptr<T>(&self) -> &mut T {
+        &mut *(self.0 as *mut T)
     }
 }
 
@@ -128,12 +162,16 @@ impl PAddr {
 
     #[cfg(not(test))]
     pub fn to_paddr_global(&self) -> PAddrGlobal {
-        todo!()
+        PAddrGlobal(((self.0 as u64) + crate::arch::globals::MEM_MAP_OFFSET_LOCATION) as _)
     }
 }
 
 impl VAddr {
     pub unsafe fn as_mut_ptr<T>(&self) -> &mut T {
         &mut *(self.0 as *mut T)
+    }
+
+    pub fn is_kernel_mode(&self) -> bool {
+        (self.0 as u64 & (1 << 62)) > 0
     }
 }

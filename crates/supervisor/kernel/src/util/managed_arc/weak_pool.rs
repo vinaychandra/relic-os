@@ -12,10 +12,37 @@ use std::{
 };
 
 /// A pool of managed weak nodes.
-#[derive(Debug)]
 pub struct ManagedWeakPool<const SIZE: usize> {
     pool_items: [Mutex<Option<ManagedWeakNode>>; SIZE],
     this_pool_location: PAddrGlobal,
+}
+
+impl<const SIZE: usize> core::fmt::Debug for ManagedWeakPool<SIZE> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Temp<'a, const SIZE: usize> {
+            val: &'a [Mutex<Option<ManagedWeakNode>>; SIZE],
+        }
+
+        impl<'a, const SIZE: usize> core::fmt::Debug for Temp<'a, SIZE> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut a = f.debug_map();
+                for iter in self.val.iter().enumerate() {
+                    if iter.1.try_lock().map_or(true, |a| (&*a).is_some()) {
+                        a.entry(&iter.0, iter.1);
+                    }
+                }
+                a.finish()
+            }
+        }
+
+        let temp = Temp {
+            val: &self.pool_items,
+        };
+        let mut a = f.debug_struct("ManagedWeakPool");
+        a.field("this_pool_location", &self.this_pool_location);
+        a.field("weak_items", &temp);
+        a.finish()
+    }
 }
 
 /// Managed Arc for weak pool of size 1.
@@ -56,7 +83,7 @@ impl<const SIZE: usize> ManagedWeakPool<SIZE> {
 
     /// Like `upgrade_any`, but create the pointer using the
     /// given type.
-    pub fn upgrade<T: Any>(&self, index: usize) -> Option<ManagedArc<T>>
+    pub fn upgrade<T: Any + core::fmt::Debug>(&self, index: usize) -> Option<ManagedArc<T>>
     where
         ManagedArc<T>: Any,
         T: Sized,
@@ -132,6 +159,27 @@ impl<const SIZE: usize> ManagedWeakPool<SIZE> {
             }
         }
         None
+    }
+
+    /// Remove any capability at the given index
+    /// True if removed something. False, if empty cap slot.
+    pub fn remove_any_at(&self, index: usize) -> bool {
+        let mut items = self.pool_items[index].lock();
+        items.take().is_some()
+    }
+
+    /// Number of capabilities stored currently in the pool. (Conveservative)
+    pub fn capability_count(&self) -> usize {
+        let mut return_val = 0;
+        for item in self.pool_items.iter() {
+            if let Some(inv) = item.try_lock() {
+                if inv.is_some() {
+                    return_val += 1;
+                }
+            }
+        }
+
+        return_val
     }
 }
 

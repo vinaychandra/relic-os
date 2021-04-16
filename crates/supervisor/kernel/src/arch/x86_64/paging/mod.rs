@@ -4,9 +4,6 @@ pub mod table;
 /// Utilities for paging
 pub mod utils;
 
-/// Basic page length in x86_64 (4 KiB).
-pub const BASE_PAGE_LENGTH: usize = 4096; // 4 KiB
-
 /// MAXPHYADDR, which is at most 52; (use CPUID for finding system value).
 pub const MAXPHYADDR: u64 = 52;
 

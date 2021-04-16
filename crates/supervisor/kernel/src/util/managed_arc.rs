@@ -44,7 +44,7 @@ struct ManagedWeakAddr {
 /// Inner of an Arc, containing strong pointers and weak pointers
 /// information. Wrap the actual data.
 #[repr(C)]
-struct ManagedArcInner<T: ?Sized> {
+struct ManagedArcInner<T: ?Sized + fmt::Debug> {
     strong_count: Mutex<usize>,
     /// Pointer to the first weak reference. This also acts as a lock
     /// to the double linked list for the weak pointers.
@@ -53,12 +53,20 @@ struct ManagedArcInner<T: ?Sized> {
 }
 
 /// A managed Arc, pointing to a `ManagedArcInner`.
-pub struct ManagedArc<T: ?Sized> {
+pub struct ManagedArc<T: ?Sized + fmt::Debug> {
     managed_arc_inner_ptr: NonNull<ManagedArcInner<T>>,
 }
 
-impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<ManagedArc<U>> for ManagedArc<T> {}
-impl<T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<ManagedArc<U>> for ManagedArc<T> {}
+unsafe impl<T: ?Sized + fmt::Debug> Sync for ManagedArc<T> {}
+unsafe impl<T: ?Sized + fmt::Debug> Send for ManagedArc<T> {}
+impl<T: ?Sized + Unsize<U> + fmt::Debug, U: ?Sized + fmt::Debug> CoerceUnsized<ManagedArc<U>>
+    for ManagedArc<T>
+{
+}
+impl<T: ?Sized + Unsize<U> + fmt::Debug, U: ?Sized + fmt::Debug> DispatchFromDyn<ManagedArc<U>>
+    for ManagedArc<T>
+{
+}
 
 impl ManagedWeakAddr {
     fn get_object(&self) -> &Mutex<Option<ManagedWeakNode>> {
@@ -70,7 +78,7 @@ impl ManagedWeakAddr {
     }
 }
 
-impl<T: ?Sized> Deref for ManagedArc<T> {
+impl<T: ?Sized + fmt::Debug> Deref for ManagedArc<T> {
     type Target = T;
 
     #[inline]
@@ -111,7 +119,7 @@ impl Drop for ManagedWeakNode {
     }
 }
 
-impl<T: ?Sized> Drop for ManagedArcInner<T> {
+impl<T: ?Sized + fmt::Debug> Drop for ManagedArcInner<T> {
     fn drop(&mut self) {
         let strong_count = self.strong_count.lock();
         assert!(*strong_count == 0);
@@ -135,7 +143,7 @@ impl<T: ?Sized> Drop for ManagedArcInner<T> {
     }
 }
 
-impl<T: ?Sized> Drop for ManagedArc<T> {
+impl<T: ?Sized + fmt::Debug> Drop for ManagedArc<T> {
     fn drop(&mut self) {
         let inner_obj = self.read_object();
         let mut strong_count = inner_obj.strong_count.lock();
@@ -152,18 +160,25 @@ impl<T: ?Sized> Drop for ManagedArc<T> {
     }
 }
 
-impl<T> fmt::Debug for ManagedArc<T> {
+impl<T: ?Sized + fmt::Debug> fmt::Debug for ManagedArc<T> {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}({:p})",
-            core::any::type_name::<Self>(),
-            self.managed_arc_inner_ptr.as_ptr()
-        )
+        let mut a = f.debug_struct(core::any::type_name::<Self>());
+        a.field("inner_ptr", &self.managed_arc_inner_ptr.as_ptr());
+        a.field("object", &self.read_object());
+        a.finish()
     }
 }
 
-impl<T: ?Sized> Clone for ManagedArc<T> {
+impl<T: ?Sized + fmt::Debug> fmt::Debug for ManagedArcInner<T> {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.debug_struct(core::any::type_name::<T>())
+            .field("strong_count", &self.strong_count)
+            .field("data", &&self.arced_data)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T: ?Sized + fmt::Debug> Clone for ManagedArc<T> {
     fn clone(&self) -> Self {
         let inner_obj = self.read_object();
         let mut strong_count = inner_obj.strong_count.lock();
@@ -175,7 +190,7 @@ impl<T: ?Sized> Clone for ManagedArc<T> {
     }
 }
 
-impl<T: ?Sized> ManagedArc<T> {
+impl<T: ?Sized + fmt::Debug> ManagedArc<T> {
     /// Get the ManagedArcInner length.
     pub fn inner_type_length() -> usize
     where
@@ -294,7 +309,7 @@ pub trait ManagedArcTrait {
     fn get_inner_type() -> TypeId;
 }
 
-impl<T: Sized + 'static> ManagedArcTrait for ManagedArc<T> {
+impl<T: Sized + 'static + fmt::Debug> ManagedArcTrait for ManagedArc<T> {
     fn get_inner_type() -> TypeId {
         TypeId::of::<T>()
     }
@@ -310,7 +325,7 @@ impl ManagedArcAny {
     }
 }
 
-impl<T: Any> From<ManagedArcAny> for ManagedArc<T> {
+impl<T: Any + fmt::Debug> From<ManagedArcAny> for ManagedArc<T> {
     fn from(any: ManagedArcAny) -> Self {
         assert!((*any).type_id() == TypeId::of::<T>(), "Downcast mismatch");
         let arc_inner_ptr = any.managed_arc_inner_ptr;

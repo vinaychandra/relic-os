@@ -1,11 +1,11 @@
 use std::ptr;
 
-use crate::arch::globals::MEM_MAP_OFFSET_LOCATION;
-use heapless::Vec;
-use relic_kernel_core::{
+use crate::{
     addr::{PAddr, VAddr},
+    arch::globals::MEM_MAP_OFFSET_LOCATION,
     util::memory_region::MemoryRegion,
 };
+use heapless::Vec;
 
 extern "C" {
     static mut __tdata_start: usize;
@@ -56,6 +56,7 @@ pub fn initialize_tls(free_regions: &mut Vec<MemoryRegion, heapless::consts::U32
     info!(target: "initialize_tls", "TLS data loaded. Setting fs");
     let fs_ptr = ((tls_ptr as *const u8 as u64) + (total_size as u64)) as *mut u64;
     x86_64::registers::model_specific::FsBase::write(x86_64::VirtAddr::from_ptr(fs_ptr));
+    x86_64::registers::model_specific::KernelGsBase::write(x86_64::VirtAddr::from_ptr(fs_ptr));
     unsafe {
         // SystemV Abi needs [fs:0] to be the value of fs
         *fs_ptr = fs_ptr as u64;

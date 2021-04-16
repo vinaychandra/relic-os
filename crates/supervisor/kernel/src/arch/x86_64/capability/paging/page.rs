@@ -6,7 +6,7 @@ use crate::{
     addr::PAddrGlobal,
     arch::{
         capability::paging::page_cap::{PageCap, PageDescriptor},
-        paging::BASE_PAGE_LENGTH,
+        globals::BASE_PAGE_LENGTH,
     },
     capability::UntypedDescriptor,
     util::managed_arc::ManagedWeakPool1Arc,
@@ -15,7 +15,7 @@ use crate::{
 /// Page length used in current kernel. This is `BASE_PAGE_LENGTH` in x86_64.
 pub const PAGE_LENGTH: usize = BASE_PAGE_LENGTH;
 
-impl<T: SetDefault + Any> PageCap<T> {
+impl<T: SetDefault + Any + core::fmt::Debug> PageCap<T> {
     pub fn retype_from(untyped: &mut UntypedDescriptor) -> Result<Self, CapabilityErrors> {
         unsafe {
             Self::bootstrap(
@@ -86,7 +86,7 @@ impl<T: SetDefault + Any> PageDescriptor<T> {
         unsafe { self.page_object().as_ref() }
     }
 
-    fn write(&mut self) -> &mut T {
+    pub fn write(&mut self) -> &mut T {
         unsafe { self.page_object().as_mut() }
     }
 }

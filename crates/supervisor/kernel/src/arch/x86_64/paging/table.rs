@@ -15,7 +15,8 @@ macro_rules! check_flag {
 
 use crate::addr::{PAddr, VAddr};
 
-use super::{ADDRESS_MASK, BASE_PAGE_LENGTH};
+use super::ADDRESS_MASK;
+use crate::arch::globals::BASE_PAGE_LENGTH;
 
 /// A PML4 table.
 /// In practice this has only 4 entries but it still needs to be the size of a 4K page.

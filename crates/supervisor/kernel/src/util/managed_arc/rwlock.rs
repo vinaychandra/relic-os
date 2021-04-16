@@ -32,7 +32,7 @@ impl<'a, T: 'a> DerefMut for ManagedArcRwLockWriteGuard<'a, T> {
     }
 }
 
-impl<U> ManagedArc<RwLock<U>> {
+impl<U: core::fmt::Debug> ManagedArc<RwLock<U>> {
     /// Read the value from the ManagedArc. Returns the guard.
     pub fn read(&self) -> ManagedArcRwLockReadGuard<U> {
         let inner_obj = self.read_object();

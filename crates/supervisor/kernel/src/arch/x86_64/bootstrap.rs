@@ -1,10 +1,10 @@
-use heapless::Vec;
-use log::LevelFilter;
-use relic_kernel_core::{
+use crate::{
+    addr::*,
     arch::paging::{table::*, utils},
-    prelude::*,
     util::memory_region::MemoryRegion,
 };
+use heapless::Vec;
+use log::LevelFilter;
 use relic_utils::align;
 use x86_64::registers::{control::Cr4Flags, model_specific::EferFlags};
 
@@ -73,12 +73,12 @@ fn initialize_bootstrap_core2() -> ! {
         // Bootboot does a mem map at 0x0
         current_page_table = unsafe { &mut *(current_page_table_paddr as *mut _) };
 
-        let identity_mapping = |addr: PAddr| {
-            let value: u64 = addr.into();
-            VAddr::new(value)
-        };
-
         let identity_translate = |l4: &PML4, addr: VAddr| unsafe {
+            let identity_mapping = |addr: PAddr| {
+                let value: u64 = addr.into();
+                VAddr::new(value)
+            };
+
             let l3_entry = l4[pml4_index(addr)];
             let l3_paddr = l3_entry.get_address();
             let l3_vaddr = identity_mapping(l3_paddr);
@@ -93,7 +93,10 @@ fn initialize_bootstrap_core2() -> ! {
             let l1: &PT = l1_vaddr.as_mut_ptr();
             let l0_entry = l1[pt_index(addr)];
             let l0_paddr = l0_entry.get_address();
-            l0_paddr
+            let vaddr_u64: u64 = addr.into();
+            let page_paddr_u64: u64 = l0_paddr.into();
+
+            (page_paddr_u64 | (vaddr_u64 & 0b111111111111)).into()
         };
 
         // Create the page table entries
@@ -186,27 +189,10 @@ fn initialize_bootstrap_core2() -> ! {
             }
         }
 
-        // Store the created table.
-        let translate = |l4: &PML4, addr: VAddr| unsafe {
-            let l3_entry = l4[pml4_index(addr)];
-            let l3_paddr = l3_entry.get_address();
-            let l3_vaddr = addr_mapping(l3_paddr);
-            let l3: &PDPT = l3_vaddr.as_mut_ptr();
-            let l2_entry = l3[pdpt_index(addr)];
-            let l2_paddr = l2_entry.get_address();
-            let l2_vaddr = addr_mapping(l2_paddr);
-            let l2: &PD = l2_vaddr.as_mut_ptr();
-            let l1_entry = l2[pd_index(addr)];
-            let l1_paddr = l1_entry.get_address();
-            let l1_vaddr = addr_mapping(l1_paddr);
-            let l1: &PT = l1_vaddr.as_mut_ptr();
-            let l0_entry = l1[pt_index(addr)];
-            let l0_paddr = l0_entry.get_address();
-            l0_paddr
-        };
         let pd_entries_vaddr =
             unsafe { &KERNEL_STACK_PD_ENTRIES.0 as *const [PDEntry] as *const u8 as u64 };
-        let pd_entries_paddr = translate(current_page_table, pd_entries_vaddr.into());
+        let vadd: VAddr = pd_entries_vaddr.into();
+        let pd_entries_paddr = vadd.translate(current_page_table).unwrap();
         let pdpt_flags = PDPTEntry::PDPT_P | PDPTEntry::PDPT_G | PDPTEntry::PDPT_RW;
         let pdpt_entry = PDPTEntry::new(pd_entries_paddr, pdpt_flags);
         l3[p3_index] = pdpt_entry;
@@ -250,6 +236,7 @@ fn initialize_bootstrap_core2() -> ! {
         let aligned_stack_end = align::align_down(stack_end, globals::STACK_ALIGN);
 
         info!(target: "bootstrap", "Kernel stack switching to {:x}", aligned_stack_end);
+        unsafe { FREE_REGIONS = Some(free_regions) }
         // Switch to level 2.
         unsafe {
             asm!("
@@ -261,7 +248,9 @@ fn initialize_bootstrap_core2() -> ! {
     }
 }
 
-fn initialize_bootstrap_core3() -> ! {
+static mut FREE_REGIONS: Option<Vec<MemoryRegion, heapless::consts::U32>> = None;
+
+extern "C" fn initialize_bootstrap_core3() -> ! {
     info!(target: "bootstrap", "CPU Core ready. Is BSP: true, Core ID: {}", super::cpu_locals::PROCESSOR_ID.get());
-    crate::main_bsp()
+    unsafe { crate::main_bsp(FREE_REGIONS.take().unwrap()) }
 }

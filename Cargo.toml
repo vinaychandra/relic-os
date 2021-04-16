@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "crates/supervisor/kernel",
-    "crates/supervisor/kernel-core",
     "crates/common/relic-abi",
     "crates/common/relic-std",
     "crates/common/relic-utils",

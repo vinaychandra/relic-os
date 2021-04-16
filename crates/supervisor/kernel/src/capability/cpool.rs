@@ -9,6 +9,7 @@ use crate::{
 };
 
 /// Capability pool descriptor.
+#[derive(Debug)]
 pub struct CPoolDescriptor {
     weak_pool: ManagedWeakPool256Arc,
     #[allow(dead_code)]
@@ -32,13 +33,13 @@ impl CPoolDescriptor {
 
     /// Like `upgrade_any`, but returns a value with the specified
     /// type.
-    pub fn upgrade<T: Any>(&self, index: usize) -> Option<ManagedArc<T>> {
+    pub fn upgrade<T: Any + core::fmt::Debug>(&self, index: usize) -> Option<ManagedArc<T>> {
         self.weak_pool.upgrade(index)
     }
 
     /// Downgrade a capability into the capability pool (weak pool) at
     /// a specified index.
-    pub fn downgrade_at<T: Any>(
+    pub fn downgrade_at<T: Any + core::fmt::Debug>(
         &self,
         arc: ManagedArc<T>,
         index: usize,
@@ -50,7 +51,10 @@ impl CPoolDescriptor {
 
     /// Downgrade a capability into the capability pool (weak pool) at
     /// a free index.
-    pub fn downgrade_free<T: Any>(&self, arc: ManagedArc<T>) -> Result<usize, CapabilityErrors> {
+    pub fn downgrade_free<T: Any + core::fmt::Debug>(
+        &self,
+        arc: ManagedArc<T>,
+    ) -> Result<usize, CapabilityErrors> {
         self.weak_pool
             .downgrade_free(arc)
             .ok_or(CapabilityErrors::CapabilitySlotsFull)
@@ -79,6 +83,11 @@ impl CPoolDescriptor {
     /// Size of the capability pool.
     pub fn size(&self) -> usize {
         256
+    }
+
+    /// Number of capabilities stored currently in the pool. (Conveservative)
+    pub fn capability_count(&self) -> usize {
+        self.weak_pool.capability_count()
     }
 }
 
@@ -149,14 +158,14 @@ impl CPoolCap {
     }
 
     /// Lookup upgrading a capability from a capability address.
-    pub fn lookup_upgrade<T: Any>(&self, caddr: CAddr) -> Option<ManagedArc<T>> {
+    pub fn lookup_upgrade<T: Any + core::fmt::Debug>(&self, caddr: CAddr) -> Option<ManagedArc<T>> {
         self.lookup(caddr, |data| {
             data.map_or(None, |(cpool, index)| cpool.upgrade(index))
         })
     }
 
     /// Downgrade a capability into the capability pool at a specified capability address.
-    pub fn lookup_downgrade_at<T: Any>(
+    pub fn lookup_downgrade_at<T: Any + core::fmt::Debug>(
         &self,
         arc: ManagedArc<T>,
         caddr: CAddr,

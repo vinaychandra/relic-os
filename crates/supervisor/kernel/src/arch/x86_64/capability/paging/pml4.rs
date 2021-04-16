@@ -7,9 +7,10 @@ use crate::{
     addr::{PAddrGlobal, VAddr},
     arch::{
         capability::paging::page_cap::{PDCap, PDPTCap, PML4Cap, PML4Descriptor, PTCap, PageCap},
+        globals::BASE_PAGE_LENGTH,
         paging::{
             table::{pd_index, pdpt_index, pml4_index, pt_index, PML4Entry, PML4},
-            BASE_PAGE_LENGTH,
+            utils,
         },
     },
     capability::{CPoolDescriptor, UntypedDescriptor},
@@ -36,9 +37,12 @@ impl PML4Cap {
                         *item = PML4Entry::empty();
                     }
 
-                    // TODO vinay
-                    // desc.write()[pml4_index(VAddr::from(KERNEL_BASE))] =
-                    //     PML4Entry::new(KERNEL_PDPT.paddr(), PML4_P | PML4_RW);
+                    {
+                        let current_page_table_paddr: u64 = utils::cr3().into();
+                        let current_page_table: &PML4 = &*(current_page_table_paddr as *const _);
+                        desc.write()[510] = current_page_table[510];
+                        desc.write()[511] = current_page_table[511];
+                    }
 
                     arc = Some(Self::new(paddr, RwLock::new(desc)));
 
@@ -56,7 +60,7 @@ impl PML4Cap {
         let sub_desc = sub.read();
         // TODO vinay
         // assert!(!(pml4_index(VAddr::from(KERNEL_BASE)) == index));
-        if !current[index].is_present() {
+        if current[index].is_present() {
             return Err(CapabilityErrors::CapabilityAlreadyOccupied);
         }
 
@@ -72,12 +76,13 @@ impl PML4Cap {
         Ok(())
     }
 
-    pub fn map<T: SetDefault + Any>(
+    pub fn map<T: SetDefault + Any + core::fmt::Debug>(
         &mut self,
         vaddr: VAddr,
         page: &PageCap<T>,
         untyped: &mut UntypedDescriptor,
         cpool: &mut CPoolDescriptor,
+        perms: crate::capability::MapPermissions,
     ) -> Result<(), CapabilityErrors> {
         let mut pdpt_cap: PDPTCap = {
             let index = pml4_index(vaddr);
@@ -174,7 +179,7 @@ impl PML4Cap {
             cpool.upgrade(position).unwrap()
         };
 
-        pt_cap.map_page(pt_index(vaddr), page)?;
+        pt_cap.map_page(pt_index(vaddr), page, perms)?;
         Ok(())
     }
 }

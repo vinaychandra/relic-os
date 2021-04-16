@@ -2,6 +2,7 @@ use core::convert::From;
 use core::ops::Shl;
 
 #[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct CAddr(pub [u8; 7], pub u8);
 
 impl Shl<usize> for CAddr {

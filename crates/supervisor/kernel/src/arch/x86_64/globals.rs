@@ -21,3 +21,6 @@ pub const KERNEL_STACK_NUM_PAGES: usize = 2;
 /// First stack is from [`KERNEL_STACK_START`] to
 /// `KERNEL_STACK_START  + KERNEL_STACK_NUM_PAGES * 2MiB`.
 pub const KERNEL_STACK_START: usize = 0xFFFF_FF80_0000_0000;
+
+/// Basic page length in x86_64 (4 KiB).
+pub const BASE_PAGE_LENGTH: usize = 4096; // 4 KiB

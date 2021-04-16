@@ -11,7 +11,7 @@ use crate::{
 
 /// Untyped memory descriptor. Represents a
 /// chunk of physical memory.
-#[derive(Getters)]
+#[derive(Getters, Debug)]
 pub struct UntypedDescriptor {
     /// Start physical address of the untyped region.
     #[getset(get = "pub")]

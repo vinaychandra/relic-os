@@ -2,6 +2,7 @@
 
 pub mod caddr;
 pub mod cap;
+pub mod syscall;
 
 /// Prelude to re-upload commonly used items.
 pub mod prelude {

@@ -21,7 +21,7 @@ CARGO_STD_FEATURES=-Zbuild-std=core,compiler_builtins,alloc -Zbuild-std-features
 
 # UserSpace build
 userspace:
-	cargo build --target ./triplets/$(PLATFORM)-relic-user.json --workspace --exclude relic-kernel  --exclude relic-kernel-core $(CARGO_STD_FEATURES)
+	cargo build --target ./triplets/$(PLATFORM)-relic-user.json --workspace --exclude relic-kernel $(CARGO_STD_FEATURES)
 
 # Kernel build
 target/$(PLATFORM)-relic-kernel/debug/relic-kernel: $(KERNEL_SOURCES)
@@ -40,7 +40,7 @@ check-image: target/$(PLATFORM)-relic-kernel/debug/relic-kernel
 	./others/bootboot/mkbootimg-${HOST} check $^
 
 efi: target/disk-$(PLATFORM).img
-	qemu-system-x86_64 -bios $(OVMF) -m 128 -drive file=./target/disk-x86_64.img,format=raw -serial stdio -smp 2 -no-shutdown -no-reboot
+	qemu-system-x86_64 -bios $(OVMF) -m 128 -drive file=./target/disk-x86_64.img,format=raw -serial stdio -no-shutdown -no-reboot
 
 efi-monitor: target/disk-$(PLATFORM).img
 	qemu-system-x86_64 -bios $(OVMF) -m 128 -drive file=./target/disk-x86_64.img,format=raw -monitor stdio -serial vc
@@ -53,8 +53,8 @@ clean:
 	cargo clean
 
 test:
-	cargo test --workspace --exclude relic-sigma --exclude relic-kernel
+	cargo test --workspace --exclude relic-sigma
 
 doc:
 	cargo doc --target ./triplets/$(PLATFORM)-relic-kernel.json -p relic-kernel $(CARGO_STD_FEATURES)
-	cargo doc --target ./triplets/$(PLATFORM)-relic-user.json --workspace --exclude relic-kernel --exclude relic-kernel-core $(CARGO_STD_FEATURES)
+	cargo doc --target ./triplets/$(PLATFORM)-relic-user.json --workspace --exclude relic-kernel $(CARGO_STD_FEATURES)

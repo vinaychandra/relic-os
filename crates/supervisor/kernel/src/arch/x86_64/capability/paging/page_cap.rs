@@ -5,9 +5,9 @@ use spin::RwLock;
 
 use crate::{
     addr::PAddrGlobal,
-    arch::paging::{
-        table::{PDEntry, PDPTEntry, PTEntry, PD, PDPT, PT},
-        BASE_PAGE_LENGTH,
+    arch::{
+        globals::BASE_PAGE_LENGTH,
+        paging::table::{PDEntry, PDPTEntry, PTEntry, PD, PDPT, PT},
     },
     capability::UntypedDescriptor,
     util::managed_arc::{ManagedArc, ManagedArcAny, ManagedWeakPool1Arc},
@@ -17,6 +17,7 @@ use crate::{
 pub const PAGE_LENGTH: usize = BASE_PAGE_LENGTH;
 
 /// PML4 page table descriptor.
+#[derive(Debug)]
 pub struct PML4Descriptor {
     pub(super) start_paddr: PAddrGlobal,
     #[allow(dead_code)]
@@ -27,6 +28,7 @@ pub struct PML4Descriptor {
 pub type PML4Cap = ManagedArc<RwLock<PML4Descriptor>>;
 
 /// PDPT page table descriptor.
+#[derive(Debug)]
 pub struct PDPTDescriptor {
     pub(super) mapped_weak_pool: ManagedWeakPool1Arc,
     start_paddr: PAddrGlobal,
@@ -38,6 +40,7 @@ pub struct PDPTDescriptor {
 pub type PDPTCap = ManagedArc<RwLock<PDPTDescriptor>>;
 
 /// PD page table descriptor.
+#[derive(Debug)]
 pub struct PDDescriptor {
     mapped_weak_pool: ManagedWeakPool1Arc,
     start_paddr: PAddrGlobal,
@@ -49,6 +52,7 @@ pub struct PDDescriptor {
 pub type PDCap = ManagedArc<RwLock<PDDescriptor>>;
 
 /// PT page table descriptor.
+#[derive(Debug)]
 pub struct PTDescriptor {
     mapped_weak_pool: ManagedWeakPool1Arc,
     start_paddr: PAddrGlobal,
@@ -60,6 +64,7 @@ pub struct PTDescriptor {
 pub type PTCap = ManagedArc<RwLock<PTDescriptor>>;
 
 /// Page descriptor.
+#[derive(Debug)]
 pub struct PageDescriptor<T: SetDefault + Any> {
     pub(super) mapped_weak_pool: ManagedWeakPool1Arc,
     pub(super) start_paddr: PAddrGlobal,
@@ -216,10 +221,11 @@ impl PTCap {
     }
 
     /// Map a page in this PT.
-    pub fn map_page<T: SetDefault + Any>(
+    pub fn map_page<T: SetDefault + Any + core::fmt::Debug>(
         &mut self,
         index: usize,
         sub: &PageCap<T>,
+        perms: crate::capability::MapPermissions,
     ) -> Result<(), CapabilityErrors> {
         let mut current_desc = self.write();
         let current = current_desc.write();
@@ -228,14 +234,19 @@ impl PTCap {
             return Err(CapabilityErrors::CapabilityAlreadyOccupied);
         }
 
+        let mut flags = PTEntry::PT_P | PTEntry::PT_US;
+        if perms.contains(crate::capability::MapPermissions::WRITE) {
+            flags |= PTEntry::PT_RW;
+        }
+        if !perms.contains(crate::capability::MapPermissions::EXECUTE) {
+            flags |= PTEntry::PT_XD;
+        }
+
         sub_desc
             .mapped_weak_pool
             .downgrade_at(self.clone(), 0)
             .map_err(|_| CapabilityErrors::MemoryAlreadyMapped)?;
-        current[index] = PTEntry::new(
-            sub_desc.start_paddr.to_paddr(),
-            PTEntry::PT_P | PTEntry::PT_RW | PTEntry::PT_US,
-        );
+        current[index] = PTEntry::new(sub_desc.start_paddr.to_paddr(), flags);
 
         Ok(())
     }
