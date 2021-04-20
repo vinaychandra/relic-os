@@ -1,3 +1,6 @@
+//! Simple memory region representation. Supports allocations
+//! and tracks the amount of memory allocated.
+
 use relic_utils::align;
 
 use crate::addr::PAddr;

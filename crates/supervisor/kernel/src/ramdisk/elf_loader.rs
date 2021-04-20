@@ -15,8 +15,7 @@ use crate::{
     capability::{CPoolCap, MapPermissions, RawPageCap, UntypedCap},
 };
 
-/// Default ELF loader class. Can load ELF onto address space
-/// defined by the [mapper].
+/// Default ELF loader class for the sigma space.
 #[derive(CopyGetters, Getters, MutGetters)]
 pub struct DefaultElfLoader<'a> {
     vbase: VAddr,

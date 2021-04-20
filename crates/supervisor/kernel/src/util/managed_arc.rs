@@ -2,8 +2,8 @@
 //! This is different in the implementation of the standard library's arc
 //! in the sense that memory is considered freed once all strong references
 //! go out. This requires weak references to hold space in memory. This is
-//! denoted by the [`ManagedWeakNode`] type. Any weak pointer point to this
-//! node which then points to the actual contained data - [`ManagedArcInner<T>`].
+//! denoted by the ManagedWeakNode type. Any weak pointer point to this
+//! node which then points to the actual contained data - ManagedArcInner<T>.
 
 use crate::addr::PAddrGlobal;
 use spin::Mutex;

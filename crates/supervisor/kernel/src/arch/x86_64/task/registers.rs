@@ -74,7 +74,7 @@ impl Registers {
 #[thread_local]
 static mut THREAD_SWITCH_RSP_RBP: (u64, u64) = (0, 0);
 
-/// This function sets the CPU Register so that the syscall will call into [syscall_entry] function.
+/// This function sets the CPU Register so that the syscall will call into [`syscall_entry_fn`] function.
 fn set_syscall_location(syscall_entry: *const ()) {
     LStar::write(x86_64::VirtAddr::new(syscall_entry as u64));
 }

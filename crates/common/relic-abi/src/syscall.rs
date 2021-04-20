@@ -9,8 +9,10 @@ pub struct TaskBuffer {
     /// Address of the current buffer.
     pub self_address: u64,
 
-    /// Payload information when system call requires it.
+    /// Payload length for a syscall.
     pub payload_length: usize,
+    /// Payload data in the task buffer. Only data upto
+    /// [`Self::payload_length`] is valid when used.
     pub payload_data: [u8; 2048],
 
     /// Capability information when system call requires it.
@@ -38,7 +40,7 @@ impl TaskBuffer {
         Ok(())
     }
 
-    /// Read from task buffer as type T. Can fail if payload length mismatches.
+    /// Read from task buffer as type T. Will fail if payload length mismatches.
     pub unsafe fn read_from_task_buffer<T>(&self) -> Result<T, ()> {
         let data = &self.payload_data[..self.payload_length];
         if data.len() != core::mem::size_of::<T>() {
@@ -54,14 +56,19 @@ impl TaskBuffer {
 }
 
 impl SetDefault for TaskBuffer {
-    fn set_default(&mut self) {}
+    fn set_default(&mut self) {
+        self.payload_length = 0;
+    }
 }
 
 #[derive(Debug, Clone)]
 #[repr(C)]
 #[non_exhaustive]
 pub enum SystemCall {
-    None,  // 0
+    /// No system call. This should not be invoked.
+    None, // 0
+    /// Yield system call. Doesn't need a capability.
+    /// Used to give up the current timeslice.
     Yield, // 1
 }
 
@@ -72,6 +79,8 @@ impl Default for SystemCall {
 }
 
 impl SystemCall {
+    /// Convert the system call representation into a tuple so that
+    /// it can be stored directly in registers instead of memory.
     pub fn as_regs(&self) -> Result<(u64, u64, u64, u64, u64), ()> {
         match self {
             SystemCall::Yield => Ok((1, 0, 0, 0, 0)),
@@ -79,6 +88,8 @@ impl SystemCall {
         }
     }
 
+    /// Convert the in-register representtaion to the system call representation
+    /// Reverse of [`Self::as_regs`].
     #[allow(unused_variables)]
     pub fn from_regs(a: u64, b: u64, c: u64, d: u64, e: u64) -> Result<SystemCall, ()> {
         match a {

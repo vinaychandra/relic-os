@@ -1,6 +1,6 @@
 use core::convert::TryFrom;
 
-/// Errors when using capabilities.
+/// Errors when using capabilities and syscalls.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 #[repr(u64)]
 #[non_exhaustive]
@@ -22,10 +22,11 @@ pub enum CapabilityErrors {
     SyscallNotFound,
 
     /// Unknown cap error.
-    Unknown, // Keep this last.
+    Unknown, // Keep this last, otherwise TryFrom will fail.
 }
 
 impl CapabilityErrors {
+    /// Get the u64 representation of the error.
     pub fn to_u64(&self) -> u64 {
         *self as u64
     }

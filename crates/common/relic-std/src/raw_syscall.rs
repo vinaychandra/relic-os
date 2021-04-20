@@ -2,6 +2,9 @@ use std::convert::TryInto;
 
 use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
 
+/// Make a raw syscall.
+/// This first converts the syscall into its register representation and then sends the info
+/// to the kernel.
 #[inline]
 pub fn make_syscall(syscall: &SystemCall) -> Result<(), CapabilityErrors> {
     let regs = syscall.as_regs().map_err(|_| CapabilityErrors::Unknown)?;
@@ -43,11 +46,14 @@ pub fn make_syscall(syscall: &SystemCall) -> Result<(), CapabilityErrors> {
         }
     }
 
+    // Try to convert the kernel returned error code into a capability error.
     let cap: Result<CapabilityErrors, ()> = error.try_into();
     if cap.is_err() {
+        // Unable to convert the code. Return Err with unknown.
         return Err(CapabilityErrors::Unknown);
     }
 
+    // In case of success, kernel returns a None error code.
     let value = cap.unwrap();
     if value == CapabilityErrors::None {
         return Ok(());

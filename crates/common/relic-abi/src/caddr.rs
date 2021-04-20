@@ -1,6 +1,7 @@
 use core::convert::From;
 use core::ops::Shl;
 
+/// Capability address. 64bit size.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct CAddr(pub [u8; 7], pub u8);

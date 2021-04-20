@@ -1,3 +1,9 @@
+//! Thread-Local Storage support
+//! In the kernel, this behaves as a "cpu local" storage.
+//! We use rusts `#[thread_local]` to have thread local data.
+//! Here, we load the corresponding sections into memory per
+//! each CPU on the machine.
+
 use std::ptr;
 
 use crate::{

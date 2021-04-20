@@ -1,5 +1,5 @@
 //! Simplified USTAR / TAR File format support.
-//! Adapted from https://wiki.osdev.org/USTAR
+//! Adapted from <https://wiki.osdev.org/USTAR>
 
 use alloc::str;
 use core::{fmt::Display, slice};
