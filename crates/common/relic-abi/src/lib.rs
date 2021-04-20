@@ -1,5 +1,6 @@
 #![cfg_attr(not(test), no_std)]
 
+pub mod bootstrap;
 pub mod caddr;
 pub mod cap;
 pub mod syscall;

@@ -9,7 +9,7 @@ pub mod raw_syscall;
 
 use std::panic::PanicInfo;
 
-use relic_abi::syscall::SystemCall;
+use relic_abi::{bootstrap::BootstrapInfo, syscall::TaskBuffer};
 
 /// This function is called on panic.
 #[cfg_attr(target_os = "none", panic_handler)]
@@ -17,22 +17,17 @@ fn _panic_handler(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-#[no_mangle]
+#[cfg_attr(target_os = "none", no_mangle)]
 fn _start() -> ! {
     unsafe {
-        let _tls: *const ();
-        let _tls2: *const ();
+        let tls: *const TaskBuffer;
         asm!(
             "mov {0}, fs:0",
-            out(reg) _tls
+            out(reg) tls
         );
-        raw_syscall::make_syscall(&SystemCall::Yield).unwrap();
-        let _tls2: *const ();
-        asm!(
-            "mov {0}, fs:0",
-            out(reg) _tls2
-        );
-        raw_syscall::make_syscall(&SystemCall::Yield).unwrap();
+
+        let bootstrap_info: BootstrapInfo = (*tls).read_from_task_buffer().unwrap();
+        let _b = bootstrap_info;
     }
     loop {}
 }

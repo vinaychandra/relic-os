@@ -30,6 +30,7 @@ use crate::{
 };
 use elfloader::ElfBinary;
 use heapless::Vec;
+use relic_abi::bootstrap::BootstrapInfo;
 use spin::Mutex;
 use std::panic::PanicInfo;
 
@@ -109,6 +110,11 @@ static ROOT_MEM_REGIONS: Mutex<heapless::Vec<UntypedCap, heapless::consts::U32>>
 pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
     info!(target: "main", "Free regions found: {:?}", free_regions);
 
+    let mut bootstrap_info = BootstrapInfo {
+        cpool_capability: 0.into(),
+        top_level_pml4: 0.into(),
+        free_mem_regions: (1.into(), 0.into()),
+    };
     let (mut cpool_cap, mut untyped_cap) = {
         let mut root_regions = ROOT_MEM_REGIONS.lock();
         let mut region_iter = free_regions.iter();
@@ -140,13 +146,14 @@ pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
             }
         }
 
+        bootstrap_info.free_mem_regions.1 = (root_regions.len() as u8).into();
         (cpool, untyped_target)
     };
 
     info!(target: "main", "CPool: {:?}", cpool_cap);
     info!(target: "main", "Untyped: {:?}", untyped_cap);
 
-    let (task_cap, _) = load_sigma(&mut cpool_cap, &mut untyped_cap);
+    let (task_cap, _) = load_sigma(&mut cpool_cap, &mut untyped_cap, bootstrap_info);
     let scheduler = Scheduler::new();
     scheduler.add_task_with_priority(task_cap);
     scheduler.run_forever()
@@ -155,6 +162,7 @@ pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
 fn load_sigma(
     cpool_cap: &mut CPoolCap,
     untyped_cap: &mut UntypedCap,
+    mut bootstrap_info: BootstrapInfo,
 ) -> (TaskCap, TopPageTableCap) {
     let ramdisk: UStarArchive;
     let binary = {
@@ -170,7 +178,8 @@ fn load_sigma(
             binary
         }
     };
-    let mut loader = DefaultElfLoader::new(VAddr::new(0), cpool_cap, untyped_cap);
+    let mut loader =
+        DefaultElfLoader::new(VAddr::new(0), cpool_cap, &mut bootstrap_info, untyped_cap);
     binary.load(&mut loader).expect("Binary loading failed");
     let loc: u64 = loader.exe_section_location().into();
     info!(target: "load_sigma", 
@@ -208,6 +217,12 @@ fn load_sigma(
         )
         .unwrap();
     buffer_cap.write().write().self_address = buffer_start;
+    // Load bootstrap info into payload
+    buffer_cap
+        .write()
+        .write()
+        .write_to_task_buffer(&bootstrap_info)
+        .unwrap();
 
     let task_cap = TaskCap::retype_from(&mut *loader.untyped_mut().write(), 15).unwrap();
     {

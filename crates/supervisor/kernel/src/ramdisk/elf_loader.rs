@@ -3,7 +3,7 @@
 use std::any::Any;
 
 use elfloader::{ElfLoader, Flags, LoadableHeaders, Rela, TypeRela64, P64};
-use relic_abi::{cap::CapabilityErrors, SetDefault};
+use relic_abi::{bootstrap::BootstrapInfo, cap::CapabilityErrors, SetDefault};
 use relic_utils::align;
 
 use crate::{
@@ -38,10 +38,12 @@ impl<'a> DefaultElfLoader<'a> {
     pub fn new(
         vbase: VAddr,
         cpool: &'a mut CPoolCap,
+        bootstrap_info: &mut BootstrapInfo,
         untyped: &'a mut UntypedCap,
     ) -> DefaultElfLoader<'a> {
         let pml4 = TopPageTableCap::retype_from(&mut untyped.write()).unwrap();
-        cpool.read().downgrade_free(pml4.clone()).unwrap();
+        let loc = cpool.read().downgrade_free(pml4.clone()).unwrap() as u8;
+        bootstrap_info.top_level_pml4 = loc.into();
 
         DefaultElfLoader {
             vbase,
