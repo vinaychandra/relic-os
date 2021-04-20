@@ -12,6 +12,8 @@ pub enum CapabilityErrors {
     CapabilitySlotsFull,
     /// A search for a capability or an empty slot failed.
     CapabilitySearchFailed,
+    /// The requested capability and provided capabilities mismatch.
+    CapabilityMismatch,
 
     /// This memory is already mapped.
     MemoryAlreadyMapped,
@@ -20,6 +22,9 @@ pub enum CapabilityErrors {
 
     /// Unknown syscall.
     SyscallNotFound,
+
+    /// Task buffer doesn't exist.
+    TaskBufferNotFound,
 
     /// Unknown cap error.
     Unknown, // Keep this last, otherwise TryFrom will fail.

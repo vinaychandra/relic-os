@@ -5,11 +5,11 @@
 #[cfg(not(test))]
 extern crate core as std;
 
+pub mod debug;
 pub mod raw_syscall;
+pub mod syscall_wrapper;
 
 use std::panic::PanicInfo;
-
-use relic_abi::{bootstrap::BootstrapInfo, syscall::TaskBuffer};
 
 /// This function is called on panic.
 #[cfg_attr(target_os = "none", panic_handler)]
@@ -19,15 +19,8 @@ fn _panic_handler(_info: &PanicInfo) -> ! {
 
 #[cfg_attr(target_os = "none", no_mangle)]
 fn _start() -> ! {
-    unsafe {
-        let tls: *const TaskBuffer;
-        asm!(
-            "mov {0}, fs:0",
-            out(reg) tls
-        );
-
-        let bootstrap_info: BootstrapInfo = (*tls).read_from_task_buffer().unwrap();
-        let _b = bootstrap_info;
-    }
+    let a = crate::syscall_wrapper::get_free_space(1.into());
+    let b = a.unwrap();
+    let _c = b;
     loop {}
 }

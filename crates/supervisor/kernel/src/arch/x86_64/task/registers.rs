@@ -175,6 +175,7 @@ unsafe extern "C" fn syscall_entry_fn_2(
         out("rbx") rbx, out("r12") r12, out("r13") r13,
         out("r14") r14, out("r15") r15, out("r11") rflags);
 
+    let old_fs = FsBase::read().as_u64();
     FsBase::write(KernelGsBase::read());
     let mut regs = Registers::empty();
     regs.rsp = user_rsp as u64;
@@ -186,6 +187,7 @@ unsafe extern "C" fn syscall_entry_fn_2(
     regs.r14 = r14;
     regs.r15 = r15;
     regs.rflags = rflags;
+    regs.fs = old_fs;
     REGISTERS.store(regs);
 
     let syscall = SystemCall::from_regs(a, b, c, d, e).ok();

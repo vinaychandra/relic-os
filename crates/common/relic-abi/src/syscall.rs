@@ -61,6 +61,7 @@ impl SetDefault for TaskBuffer {
     }
 }
 
+/// List of system calls supported by the kernel.
 #[derive(Debug, Clone)]
 #[repr(C)]
 #[non_exhaustive]
@@ -70,6 +71,12 @@ pub enum SystemCall {
     /// Yield system call. Doesn't need a capability.
     /// Used to give up the current timeslice.
     Yield, // 1
+    /// Print some string from the payload.
+    Print, // 2
+
+    /// Given a caddr, get the total size and free size of the
+    /// untyped capabilty space.
+    UntypedTotalFree(CAddr), // 3
 }
 
 impl Default for SystemCall {
@@ -84,6 +91,8 @@ impl SystemCall {
     pub fn as_regs(&self) -> Result<(u64, u64, u64, u64, u64), ()> {
         match self {
             SystemCall::Yield => Ok((1, 0, 0, 0, 0)),
+            SystemCall::Print => Ok((2, 0, 0, 0, 0)),
+            SystemCall::UntypedTotalFree(a) => Ok((3, (*a).into_u64(), 0, 0, 0)),
             _ => Err(()),
         }
     }
@@ -94,6 +103,8 @@ impl SystemCall {
     pub fn from_regs(a: u64, b: u64, c: u64, d: u64, e: u64) -> Result<SystemCall, ()> {
         match a {
             1 => Ok(SystemCall::Yield),
+            2 => Ok(SystemCall::Print),
+            3 => Ok(SystemCall::UntypedTotalFree(CAddr::from_u64(b))),
             _ => Err(()),
         }
     }

@@ -56,6 +56,12 @@ impl UntypedCap {
 }
 
 impl UntypedDescriptor {
+    /// Get free space in bytes.
+    pub fn get_free_space(&self) -> usize {
+        let len: u64 = (self.start_paddr + self.length - self.watermark).into();
+        len as usize
+    }
+
     /// Allocate a memory region using the given length and
     /// alignment. Shift the watermark of the current descriptor
     /// passing over the allocated region.

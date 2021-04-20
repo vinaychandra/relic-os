@@ -2,7 +2,7 @@ use core::convert::From;
 use core::ops::Shl;
 
 /// Capability address. 64bit size.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct CAddr(pub [u8; 7], pub u8);
 
@@ -16,6 +16,16 @@ impl Shl<usize> for CAddr {
             ],
             self.1 - 1,
         )
+    }
+}
+
+impl CAddr {
+    pub fn from_u64(v: u64) -> CAddr {
+        unsafe { core::mem::transmute(v) }
+    }
+
+    pub fn into_u64(self) -> u64 {
+        unsafe { core::mem::transmute(self) }
     }
 }
 
@@ -64,5 +74,18 @@ impl From<[u8; 6]> for CAddr {
 impl From<[u8; 7]> for CAddr {
     fn from(v: [u8; 7]) -> CAddr {
         CAddr([v[0], v[1], v[2], v[3], v[4], v[5], v[6]], 7)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_caddr_transmute() {
+        let caddr = CAddr([0, 1, 2, 0, 0, 0, 0], 3);
+        let u64: u64 = caddr.into_u64();
+        let back: CAddr = CAddr::from_u64(u64);
+        assert_eq!(caddr, back);
     }
 }
