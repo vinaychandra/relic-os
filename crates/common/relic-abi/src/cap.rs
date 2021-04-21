@@ -19,6 +19,8 @@ pub enum CapabilityErrors {
     MemoryAlreadyMapped,
     /// Out of memory error.
     MemoryNotSufficient,
+    /// The passed memory address is invalid.
+    InvalidMemoryAddress,
 
     /// Unknown syscall.
     SyscallNotFound,

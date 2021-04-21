@@ -88,4 +88,9 @@ mod tests {
         let back: CAddr = CAddr::from_u64(u64);
         assert_eq!(caddr, back);
     }
+
+    #[test]
+    fn test_size() {
+        assert_eq!(8, core::mem::size_of::<CAddr>());
+    }
 }

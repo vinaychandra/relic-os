@@ -175,7 +175,7 @@ impl TaskDescriptor {
 
     /// Set the tcb location for the task.
     pub fn set_tcb_location(&mut self, tcb: VAddr) {
-        assert!(!tcb.is_kernel_mode());
+        assert!(!tcb.is_valid_kernel_mode());
         assert_matches!(self.status, TaskStatus::Inactive);
 
         self.runtime.set_fs(tcb.into());

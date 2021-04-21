@@ -36,12 +36,12 @@ use crate::{
 pub static LOGGER: SerialLogger = SerialLogger;
 
 #[cfg(test)]
-const MEM_SIZE: usize = 1 << 20;
+const MEM_SIZE: usize = 1 << 25;
 #[cfg(not(test))]
 const MEM_SIZE: usize = 1 << 16;
 
 #[global_allocator]
-static A: static_alloc::Bump<[u8; MEM_SIZE]> = static_alloc::Bump::uninit(); // 64KB
+static GLOBAL_ALLOC: static_alloc::Bump<[u8; MEM_SIZE]> = static_alloc::Bump::uninit(); // 64KB
 
 pub mod cpu_locals {
     use core::cell::Cell;
@@ -54,6 +54,18 @@ pub mod cpu_locals {
 }
 
 impl VAddr {
+    pub fn is_valid_kernel_mode(self) -> bool {
+        let val: u64 = self.into();
+        let val = val >> 47;
+        val == 0b1111_1111_1111_1111_1
+    }
+
+    pub fn is_valid_user_mode(self) -> bool {
+        let val: u64 = self.into();
+        let val = val >> 47;
+        val == 0
+    }
+
     /// Translate a vaddr to paddr in given level4 page.
     pub fn translate(self, l4: &PML4) -> Option<PAddr> {
         let addr_mapping = |addr: PAddr| {
@@ -94,5 +106,17 @@ impl VAddr {
 
             Some((page_paddr_u64 | (vaddr_u64 & 0b111111111111)).into())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_vaddr_location() {
+        assert!(VAddr::new(0x0).is_valid_user_mode());
+        assert!(VAddr::new(0x7FFF_FFFF_FFFF).is_valid_user_mode());
+        assert!(VAddr::new(0xFFFF_8FFF_FFFF_FFFF).is_valid_kernel_mode());
+        assert!(VAddr::new(0xFFFF_FFFF_FFFF_FFFF).is_valid_kernel_mode());
     }
 }

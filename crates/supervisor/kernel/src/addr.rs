@@ -170,8 +170,4 @@ impl VAddr {
     pub unsafe fn as_mut_ptr<T>(&self) -> &mut T {
         &mut *(self.0 as *mut T)
     }
-
-    pub fn is_kernel_mode(&self) -> bool {
-        (self.0 as u64 & (1 << 62)) > 0
-    }
 }

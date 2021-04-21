@@ -77,6 +77,22 @@ pub enum SystemCall {
     /// Given a caddr, get the total size and free size of the
     /// untyped capabilty space.
     UntypedTotalFree(CAddr), // 3
+
+    /// Create a new raw page capability using the provided
+    /// untyped memory and store the capability in the current cpool.
+    /// Returns the new CAddr.
+    RawPageRetype { untyped_memory: CAddr },
+    /// Map a given page into the provided address.
+    RawPageMap {
+        /// To map raw pages, we might need more pages for inner tables.
+        untyped_memory: CAddr,
+        /// The top level table into which the mapping should be done.
+        top_level_table: CAddr,
+        /// The address where the mapping should be done to.
+        vaddr: u64,
+        /// The raw page capability for the request.
+        raw_page: CAddr,
+    },
 }
 
 impl Default for SystemCall {
@@ -92,7 +108,20 @@ impl SystemCall {
         match self {
             SystemCall::Yield => Ok((1, 0, 0, 0, 0)),
             SystemCall::Print => Ok((2, 0, 0, 0, 0)),
-            SystemCall::UntypedTotalFree(a) => Ok((3, (*a).into_u64(), 0, 0, 0)),
+            SystemCall::UntypedTotalFree(a) => Ok((3, a.into_u64(), 0, 0, 0)),
+            SystemCall::RawPageRetype { untyped_memory: a } => Ok((100, a.into_u64(), 0, 0, 0)),
+            SystemCall::RawPageMap {
+                untyped_memory,
+                top_level_table,
+                vaddr,
+                raw_page,
+            } => Ok((
+                101,
+                untyped_memory.into_u64(),
+                top_level_table.into_u64(),
+                *vaddr,
+                raw_page.into_u64(),
+            )),
             _ => Err(()),
         }
     }
@@ -105,6 +134,15 @@ impl SystemCall {
             1 => Ok(SystemCall::Yield),
             2 => Ok(SystemCall::Print),
             3 => Ok(SystemCall::UntypedTotalFree(CAddr::from_u64(b))),
+            100 => Ok(SystemCall::RawPageRetype {
+                untyped_memory: CAddr::from_u64(b),
+            }),
+            101 => Ok(SystemCall::RawPageMap {
+                untyped_memory: CAddr::from_u64(b),
+                top_level_table: CAddr::from_u64(c),
+                vaddr: d,
+                raw_page: CAddr::from_u64(e),
+            }),
             _ => Err(()),
         }
     }
