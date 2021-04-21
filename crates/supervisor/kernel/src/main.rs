@@ -9,7 +9,6 @@
 #![feature(assert_matches)]
 #![feature(coerce_unsized)]
 #![feature(const_fn)]
-#![feature(debug_non_exhaustive)]
 #![feature(dispatch_from_dyn)]
 #![feature(naked_functions)]
 #![feature(thread_local)]
@@ -74,6 +73,8 @@ pub mod syscall_processor;
 #[allow(dead_code)]
 #[allow(non_snake_case)]
 #[allow(non_camel_case_types)]
+#[allow(unaligned_references)]
+#[allow(deref_nullptr)]
 mod bootboot;
 
 /// Logger used by the kernel everywhere. This logger is activated by the architecture

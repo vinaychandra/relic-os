@@ -769,12 +769,8 @@ impl MMapEnt {
 impl BOOTBOOT {
     pub fn get_mmap_entries(&self) -> &'static [MMapEnt] {
         let num_mmap_entries = (self.size - 128) / 16;
-        unsafe {
-            core::slice::from_raw_parts(
-                &self.mmap.ptr as *const u64 as *const MMapEnt,
-                num_mmap_entries as usize,
-            )
-        }
+        let addr = core::ptr::addr_of!(self.mmap.ptr);
+        unsafe { core::slice::from_raw_parts(addr as *const MMapEnt, num_mmap_entries as usize) }
     }
 }
 

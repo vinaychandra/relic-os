@@ -1,15 +1,16 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(test, allow(unused_imports))]
+#![feature(alloc_error_handler)]
 #![feature(asm)]
 
-#[cfg(not(test))]
-extern crate core as std;
+extern crate alloc;
 
 pub mod debug;
+pub mod heap;
 pub mod raw_syscall;
 pub mod syscall_wrapper;
 
-use std::panic::PanicInfo;
+use core::panic::PanicInfo;
 
 use relic_abi::bootstrap::BootstrapInfo;
 use relic_abi::syscall::TaskBuffer;
