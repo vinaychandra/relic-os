@@ -21,7 +21,8 @@ pub enum TaskStatus {
     /// The task has made a syscall and is now waiting for response.
     SyscalledAndWaiting(Option<SystemCall>),
     /// The task has made a syscall and is response is ready.
-    SyscalledReadyToResume(CapabilityErrors),
+    /// Can optionally return upto two values.
+    SyscalledReadyToResume(CapabilityErrors, u64, u64),
 
     /// Unknown task state.
     Unknown,
@@ -192,8 +193,8 @@ impl TaskDescriptor {
         }
 
         let syscall_info = match current_status {
-            TaskStatus::Inactive => Some(CapabilityErrors::None),
-            TaskStatus::SyscalledReadyToResume(d) => Some(d),
+            TaskStatus::Inactive => Some((CapabilityErrors::None, 0, 0)),
+            TaskStatus::SyscalledReadyToResume(a, b, c) => Some((a, b, c)),
             _ => None,
         };
 

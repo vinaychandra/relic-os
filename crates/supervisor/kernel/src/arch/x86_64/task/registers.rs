@@ -66,7 +66,7 @@ impl Registers {
             fs: 0,
         }
     }
-    pub fn switch_to(&mut self, syscall_data: Option<CapabilityErrors>) -> TaskStatus {
+    pub fn switch_to(&mut self, syscall_data: Option<(CapabilityErrors, u64, u64)>) -> TaskStatus {
         user_switching_fn(self, syscall_data)
     }
 }
@@ -82,7 +82,10 @@ fn set_syscall_location(syscall_entry: *const ()) {
 /// Switch to the user code. There are two modes for this to run.
 /// Enabling `syscall_mode` will use syscall/sysret pair which is
 /// faster than `iret` but cannot restore all registers.
-fn user_switching_fn(registers: &mut Registers, syscall: Option<CapabilityErrors>) -> TaskStatus {
+fn user_switching_fn(
+    registers: &mut Registers,
+    syscall: Option<(CapabilityErrors, u64, u64)>,
+) -> TaskStatus {
     unsafe {
         // Store the current stack info.
         let rsp: u64;
@@ -97,8 +100,8 @@ fn user_switching_fn(registers: &mut Registers, syscall: Option<CapabilityErrors
     // TODO: we only need to set this once.
     set_syscall_location(syscall_entry_fn as *const ());
 
-    if let Some(cap_err) = syscall {
-        let regs = cap_err.to_u64();
+    if let Some(data) = syscall {
+        let cap_error = data.0.to_u64();
         // Load FsBase for user.
         FsBase::write(VirtAddr::new(registers.fs));
         unsafe {
@@ -107,9 +110,9 @@ fn user_switching_fn(registers: &mut Registers, syscall: Option<CapabilityErrors
             mov rbp, rsi
             sysretq
         ",
-        in("rdi") registers.rdi, in("rsi") registers.rbp, in("rax") regs,
+        in("rdi") data.1, in("rsi") registers.rbp, in("rax") cap_error,
         in("rbx") registers.rbx, in("rcx") registers.rip, in("rdx") registers.rsp,
-        in("r8") registers.r8, in("r9") registers.r9, in("r10") registers.r10,
+        in("r8") data.2, in("r9") registers.r9, in("r10") registers.r10,
         in("r11") registers.rflags, in("r12") registers.r12, in("r13") registers.r13,
         in("r14") registers.r14, in("r15") registers.r15)
         };

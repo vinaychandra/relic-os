@@ -6,19 +6,21 @@ use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
 /// This first converts the syscall into its register representation and then sends the info
 /// to the kernel.
 #[inline]
-pub fn make_syscall(syscall: &SystemCall) -> Result<(), CapabilityErrors> {
+pub fn make_syscall(syscall: &SystemCall) -> Result<(u64, u64), CapabilityErrors> {
     let regs = syscall.as_regs().map_err(|_| CapabilityErrors::Unknown)?;
     let error: u64;
+    let a: u64;
+    let b: u64;
 
     unsafe {
         #[cfg(target_feature = "sse")]
         {
             asm!(
                 "syscall",
-                in("rdi") regs.0,
+                inout("rdi") regs.0 => a,
                 in("rsi") regs.1,
                 in("rdx") regs.2,
-                in("r8") regs.3,
+                inout("r8") regs.3 => b,
                 in("r9") regs.4,
                 // All caller-saved registers must be marked as clobberred
                 out("rax") error,
@@ -34,10 +36,10 @@ pub fn make_syscall(syscall: &SystemCall) -> Result<(), CapabilityErrors> {
         {
             asm!(
                 "syscall",
-                in("rdi") regs.0,
+                inout("rdi") regs.0 => a,
                 in("rsi") regs.1,
                 in("rdx") regs.2,
-                in("r8") regs.3,
+                inout("r8") regs.3 => b,
                 in("r9") regs.4,
                 // All caller-saved registers must be marked as clobberred
                 out("rax") error,
@@ -56,7 +58,7 @@ pub fn make_syscall(syscall: &SystemCall) -> Result<(), CapabilityErrors> {
     // In case of success, kernel returns a None error code.
     let value = cap.unwrap();
     if value == CapabilityErrors::None {
-        return Ok(());
+        return Ok((a, b));
     } else {
         return Err(value);
     }
