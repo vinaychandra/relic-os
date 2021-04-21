@@ -83,9 +83,7 @@ pub fn process_syscall(source_task: &TaskCap, syscall: Option<SystemCall>, sched
                     .lookup_upgrade(top_level_table)
                     .ok_or(CapabilityErrors::CapabilityMismatch)?;
                 let vaddr: VAddr = vaddr.into();
-                if !vaddr.is_valid_user_mode() {
-                    return Err(CapabilityErrors::InvalidMemoryAddress);
-                }
+                vaddr.validate_user_mode()?;
                 let untyped_memory: UntypedCap = cpool
                     .lookup_upgrade(untyped_memory)
                     .ok_or(CapabilityErrors::CapabilityMismatch)?;

@@ -23,6 +23,8 @@ pub mod task;
 
 pub mod tls;
 
+use relic_abi::cap::CapabilityErrors;
+
 use crate::{
     addr::{PAddr, VAddr},
     arch::{
@@ -44,26 +46,29 @@ const MEM_SIZE: usize = 1 << 16;
 static GLOBAL_ALLOC: static_alloc::Bump<[u8; MEM_SIZE]> = static_alloc::Bump::uninit(); // 64KB
 
 pub mod cpu_locals {
-    use core::cell::Cell;
-
     pub use super::interrupts::apic::LAPIC;
     pub use super::interrupts::apic::PROCESSOR_ID;
-
-    #[thread_local]
-    pub static CURRENT_THREAD_ID: Cell<usize> = Cell::new(0);
 }
 
 impl VAddr {
-    pub fn is_valid_kernel_mode(self) -> bool {
+    pub fn validate_kernel_mode(self) -> Result<(), CapabilityErrors> {
         let val: u64 = self.into();
         let val = val >> 47;
-        val == 0b1111_1111_1111_1111_1
+        if val == 0b1111_1111_1111_1111_1 {
+            Ok(())
+        } else {
+            Err(CapabilityErrors::InvalidMemoryAddress)
+        }
     }
 
-    pub fn is_valid_user_mode(self) -> bool {
+    pub fn validate_user_mode(self) -> Result<(), CapabilityErrors> {
         let val: u64 = self.into();
         let val = val >> 47;
-        val == 0
+        if val == 0 {
+            Ok(())
+        } else {
+            Err(CapabilityErrors::InvalidMemoryAddress)
+        }
     }
 
     /// Translate a vaddr to paddr in given level4 page.
@@ -114,9 +119,13 @@ mod tests {
     use super::*;
     #[test]
     fn test_vaddr_location() {
-        assert!(VAddr::new(0x0).is_valid_user_mode());
-        assert!(VAddr::new(0x7FFF_FFFF_FFFF).is_valid_user_mode());
-        assert!(VAddr::new(0xFFFF_8FFF_FFFF_FFFF).is_valid_kernel_mode());
-        assert!(VAddr::new(0xFFFF_FFFF_FFFF_FFFF).is_valid_kernel_mode());
+        assert!(VAddr::new(0x0).validate_user_mode().is_ok());
+        assert!(VAddr::new(0x7FFF_FFFF_FFFF).validate_user_mode().is_ok());
+        assert!(VAddr::new(0xFFFF_8FFF_FFFF_FFFF)
+            .validate_kernel_mode()
+            .is_ok());
+        assert!(VAddr::new(0xFFFF_FFFF_FFFF_FFFF)
+            .validate_kernel_mode()
+            .is_ok());
     }
 }

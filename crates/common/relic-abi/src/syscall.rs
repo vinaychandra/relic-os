@@ -67,16 +67,16 @@ impl SetDefault for TaskBuffer {
 #[non_exhaustive]
 pub enum SystemCall {
     /// No system call. This should not be invoked.
-    None, // 0
+    None,
     /// Yield system call. Doesn't need a capability.
     /// Used to give up the current timeslice.
-    Yield, // 1
+    Yield,
     /// Print some string from the payload.
-    Print, // 2
+    Print,
 
     /// Given a caddr, get the total size and free size of the
     /// untyped capabilty space.
-    UntypedTotalFree(CAddr), // 3
+    UntypedTotalFree(CAddr),
 
     /// Create a new raw page capability using the provided
     /// untyped memory and store the capability in the current cpool.
