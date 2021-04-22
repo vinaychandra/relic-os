@@ -169,7 +169,7 @@ paging_cap!(
     PDPTEntry,
     map_pd,
     PDCap,
-    PDPTEntry::PDPT_P | PDPTEntry::PDPT_RW | PDPTEntry::PDPT_US
+    PDPTEntry::PRESENT | PDPTEntry::READ_WRITE | PDPTEntry::USERSPACE
 );
 paging_cap!(
     PDCap,
@@ -178,7 +178,7 @@ paging_cap!(
     PDEntry,
     map_pt,
     PTCap,
-    PDEntry::PD_P | PDEntry::PD_RW | PDEntry::PD_US
+    PDEntry::PRESENT | PDEntry::READ_WRITE | PDEntry::USERSPACE
 );
 
 impl PTCap {
@@ -234,12 +234,12 @@ impl PTCap {
             return Err(CapabilityErrors::CapabilityAlreadyOccupied);
         }
 
-        let mut flags = PTEntry::PT_P | PTEntry::PT_US;
+        let mut flags = PTEntry::PRESENT | PTEntry::USERSPACE;
         if perms.contains(crate::capability::MapPermissions::WRITE) {
-            flags |= PTEntry::PT_RW;
+            flags |= PTEntry::READ_WRITE;
         }
         if !perms.contains(crate::capability::MapPermissions::EXECUTE) {
-            flags |= PTEntry::PT_XD;
+            flags |= PTEntry::EXECUTE_DISABLE;
         }
 
         sub_desc

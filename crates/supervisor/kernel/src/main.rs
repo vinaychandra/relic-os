@@ -10,6 +10,7 @@
 #![feature(coerce_unsized)]
 #![feature(const_fn)]
 #![feature(dispatch_from_dyn)]
+#![feature(maybe_uninit_extra)]
 #![feature(naked_functions)]
 #![feature(thread_local)]
 #![feature(type_ascription)]
@@ -51,8 +52,12 @@ extern crate log;
 #[macro_use]
 extern crate lazy_static;
 
+#[macro_use]
+extern crate paste;
+
 pub mod arch;
 pub mod logging;
+pub mod update;
 
 /// Support for loading of Sigma process.
 pub mod ramdisk;

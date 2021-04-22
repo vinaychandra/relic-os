@@ -70,7 +70,7 @@ impl PML4Cap {
             .map_err(|_| CapabilityErrors::MemoryAlreadyMapped)?;
         current[index] = PML4Entry::new(
             sub_desc.start_paddr().to_paddr(),
-            PML4Entry::PML4_P | PML4Entry::PML4_RW | PML4Entry::PML4_US,
+            PML4Entry::PRESENT | PML4Entry::READ_WRITE | PML4Entry::USERSPACE,
         );
 
         Ok(())

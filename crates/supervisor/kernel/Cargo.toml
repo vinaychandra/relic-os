@@ -14,10 +14,11 @@ bitflags = "1.2"
 getset = "0.1"
 heapless = "0.6"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }
-spin = "0.8"
+spin = "0.9"
 static-alloc = "0.2.2"
 elfloader = "0.11"
 crossbeam-utils = { version = "0.8.3", default-features = false }
+paste = "1.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 apic = { git = "https://github.com/rust-osdev/apic", rev = "c662e70" }

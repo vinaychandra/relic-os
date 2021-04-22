@@ -152,6 +152,10 @@ impl PAddrGlobal {
     pub unsafe fn as_mut_ptr<T>(&self) -> &mut T {
         &mut *(self.0 as *mut T)
     }
+
+    pub unsafe fn as_raw_ptr<T>(&self) -> *mut T {
+        self.0 as *mut T
+    }
 }
 
 impl PAddr {

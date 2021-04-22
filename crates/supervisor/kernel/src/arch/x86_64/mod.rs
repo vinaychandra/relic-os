@@ -26,7 +26,7 @@ pub mod tls;
 use relic_abi::cap::CapabilityErrors;
 
 use crate::{
-    addr::{PAddr, VAddr},
+    addr::{PAddr, PAddrGlobal, VAddr},
     arch::{
         paging::table::{pd_index, pdpt_index, pml4_index, pt_index, PD, PDPT, PML4, PT},
         serial::SerialLogger,
@@ -48,6 +48,14 @@ static GLOBAL_ALLOC: static_alloc::Bump<[u8; MEM_SIZE]> = static_alloc::Bump::un
 pub mod cpu_locals {
     pub use super::interrupts::apic::LAPIC;
     pub use super::interrupts::apic::PROCESSOR_ID;
+}
+
+impl PAddrGlobal {
+    pub fn assert_in_good_range(self) {
+        let val: u64 = self.into();
+        const OFFSET_END: u64 = globals::MEM_MAP_OFFSET_LOCATION + globals::MEM_MAP_SIZE;
+        debug_assert!(val > globals::MEM_MAP_OFFSET_LOCATION && val < OFFSET_END);
+    }
 }
 
 impl VAddr {
