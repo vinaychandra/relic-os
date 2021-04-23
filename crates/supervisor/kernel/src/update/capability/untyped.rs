@@ -8,7 +8,8 @@ pub struct UntypedMemoryRead<'a> {
     length: &'a Size,
     watermark: &'a PAddrGlobal,
 
-    first_child_item: &'a Option<CapRcBoxed>,
+    #[allow(dead_code)]
+    children: &'a LinkedList<MemTreeAdapter>,
 }
 
 pub struct UntypedMemoryWrite<'a> {
@@ -16,21 +17,32 @@ pub struct UntypedMemoryWrite<'a> {
     length: &'a mut Size,
     watermark: &'a mut PAddrGlobal,
 
-    first_child_item: &'a mut Option<CapRcBoxed>,
+    children: &'a mut LinkedList<MemTreeAdapter>,
+}
+
+impl<'a> UntypedMemoryWrite<'a> {
+    pub fn read(&self) -> UntypedMemoryRead<'_> {
+        UntypedMemoryRead {
+            children: self.children,
+            length: self.length,
+            watermark: self.watermark,
+            start_paddr: self.start_paddr,
+        }
+    }
 }
 
 impl Capability {
     pub fn untyped_create(&self) -> Option<UntypedMemoryRead<'_>> {
-        if let Capability::UntypedMemory {
-            first_child_item,
+        if let CapabilityEnum::UntypedMemory {
+            children,
             length,
             start_paddr,
             watermark,
             ..
-        } = self
+        } = &self.capability_data
         {
             Some(UntypedMemoryRead {
-                first_child_item,
+                children,
                 length,
                 watermark,
                 start_paddr,
@@ -41,16 +53,16 @@ impl Capability {
     }
 
     pub fn untyped_create_mut(&mut self) -> Option<UntypedMemoryWrite<'_>> {
-        if let Capability::UntypedMemory {
-            first_child_item,
+        if let CapabilityEnum::UntypedMemory {
+            children,
             length,
             start_paddr,
             watermark,
             ..
-        } = self
+        } = &mut self.capability_data
         {
             Some(UntypedMemoryWrite {
-                first_child_item,
+                children,
                 length,
                 watermark,
                 start_paddr,
@@ -64,18 +76,18 @@ impl Capability {
     ///
     /// # Safety
     ///
-    /// Can only be used for free memory regions returned from
-    /// `InitInfo`.
+    /// Can only be used for free memory regions returned from bootstrap.
     pub unsafe fn untyped_bootstrap(start_paddr: PAddrGlobal, length: usize) -> Self {
-        Self::UntypedMemory {
+        let data = CapabilityEnum::UntypedMemory {
             start_paddr,
             length,
             watermark: start_paddr,
-
-            first_child_item: None,
-
-            next: None,
-            prev: None,
+            children: LinkedList::new(MemTreeAdapter::new()),
+        };
+        Self {
+            capability_data: data,
+            mem_tree_link: LinkedListLink::new(),
+            paging_tree_link: LinkedListLink::new(),
         }
     }
 }
@@ -87,6 +99,7 @@ impl<'a> UntypedMemoryRead<'a> {
         len as usize
     }
 }
+
 impl<'a> UntypedMemoryWrite<'a> {
     /// Allocate a memory region using the given length and
     /// alignment. Shift the watermark of the current descriptor
@@ -113,24 +126,14 @@ impl<'a> UntypedMemoryWrite<'a> {
     /// next item in the derivation tree.
     pub fn derive<T, F>(&mut self, f: F) -> Result<(), CapabilityErrors>
     where
-        F: FnOnce(*mut T, Option<CapRcBoxed>) -> Result<CapRcBoxed, CapabilityErrors>,
+        F: FnOnce(*mut T) -> Result<UnsafeRef<Capability>, CapabilityErrors>,
     {
         let length = core::mem::size_of::<T>();
         let alignment = core::mem::align_of::<T>();
         let paddr = self.allocate(length, alignment)?;
 
-        let first_child = self.first_child_item.take();
-        let f_success = f(unsafe { paddr.as_raw_ptr() }, first_child.clone());
-        match f_success {
-            Ok(new_child) => {
-                *self.first_child_item = Some(new_child);
-                Ok(())
-            }
-            Err(c) => {
-                // F failed. Store the old item back.
-                *self.first_child_item = first_child;
-                Err(c)
-            }
-        }
+        let f_success = f(unsafe { paddr.as_raw_ptr() })?;
+        self.children.push_front(f_success);
+        Ok(())
     }
 }

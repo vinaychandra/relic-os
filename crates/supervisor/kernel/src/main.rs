@@ -13,6 +13,7 @@
 #![feature(maybe_uninit_extra)]
 #![feature(naked_functions)]
 #![feature(thread_local)]
+#![feature(trace_macros)]
 #![feature(type_ascription)]
 #![feature(unsize)]
 
