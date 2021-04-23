@@ -4,8 +4,8 @@ use crate::{arch::paging::table::*, util::boxed::Boxed};
 
 use super::*;
 pub mod pd;
-pub mod pdpt;
-pub mod pml4;
+// pub mod pdpt;
+// pub mod pml4;
 
 #[derive(Debug)]
 pub enum ArchCap {

@@ -3,75 +3,7 @@ use relic_utils::align;
 
 use super::*;
 
-pub struct UntypedMemoryRead<'a> {
-    start_paddr: &'a PAddrGlobal,
-    length: &'a Size,
-    watermark: &'a PAddrGlobal,
-
-    #[allow(dead_code)]
-    children: &'a LinkedList<MemTreeAdapter>,
-}
-
-pub struct UntypedMemoryWrite<'a> {
-    start_paddr: &'a mut PAddrGlobal,
-    length: &'a mut Size,
-    watermark: &'a mut PAddrGlobal,
-
-    children: &'a mut LinkedList<MemTreeAdapter>,
-}
-
-impl<'a> UntypedMemoryWrite<'a> {
-    pub fn read(&self) -> UntypedMemoryRead<'_> {
-        UntypedMemoryRead {
-            children: self.children,
-            length: self.length,
-            watermark: self.watermark,
-            start_paddr: self.start_paddr,
-        }
-    }
-}
-
 impl Capability {
-    pub fn untyped_create(&self) -> Option<UntypedMemoryRead<'_>> {
-        if let CapabilityEnum::UntypedMemory {
-            children,
-            length,
-            start_paddr,
-            watermark,
-            ..
-        } = &self.capability_data
-        {
-            Some(UntypedMemoryRead {
-                children,
-                length,
-                watermark,
-                start_paddr,
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn untyped_create_mut(&mut self) -> Option<UntypedMemoryWrite<'_>> {
-        if let CapabilityEnum::UntypedMemory {
-            children,
-            length,
-            start_paddr,
-            watermark,
-            ..
-        } = &mut self.capability_data
-        {
-            Some(UntypedMemoryWrite {
-                children,
-                length,
-                watermark,
-                start_paddr,
-            })
-        } else {
-            None
-        }
-    }
-
     /// Bootstrap an untyped capability using a memory region information.
     ///
     /// # Safety
@@ -85,37 +17,53 @@ impl Capability {
             children: LinkedList::new(MemTreeAdapter::new()),
         };
         Self {
-            capability_data: data,
+            capability_data: RefCell::new(data),
             mem_tree_link: LinkedListLink::new(),
             paging_tree_link: LinkedListLink::new(),
         }
     }
-}
 
-impl<'a> UntypedMemoryRead<'a> {
     /// Get free space in bytes.
-    pub fn untyped_get_free_space(&self) -> Size {
-        let len: u64 = (*self.start_paddr + *self.length - *self.watermark).into();
-        len as usize
+    pub fn untyped_get_free_space(&self) -> Result<Size, CapabilityErrors> {
+        if let CapabilityEnum::UntypedMemory {
+            start_paddr,
+            length,
+            watermark,
+            ..
+        } = &*self.capability_data.borrow()
+        {
+            let len: u64 = (*start_paddr + *length - *watermark).into();
+            Ok(len as usize)
+        } else {
+            Err(CapabilityErrors::CapabilityMismatch)
+        }
     }
-}
 
-impl<'a> UntypedMemoryWrite<'a> {
     /// Allocate a memory region using the given length and
     /// alignment. Shift the watermark of the current descriptor
     /// passing over the allocated region.
-    pub fn allocate(
-        &mut self,
+    pub fn untyped_allocate(
+        &self,
         length: usize,
         alignment: usize,
     ) -> Result<PAddrGlobal, CapabilityErrors> {
-        let paddr: PAddrGlobal = align::align_up((*self.watermark).into(), alignment).into();
-        if paddr + length > *self.start_paddr + *self.length {
-            return Err(CapabilityErrors::MemoryNotSufficient);
-        }
+        if let CapabilityEnum::UntypedMemory {
+            start_paddr,
+            length: mem_length,
+            watermark,
+            ..
+        } = &mut *self.capability_data.borrow_mut()
+        {
+            let paddr: PAddrGlobal = align::align_up((*watermark).into(), alignment).into();
+            if paddr + length > *start_paddr + *mem_length {
+                return Err(CapabilityErrors::MemoryNotSufficient);
+            }
 
-        *self.watermark = paddr + length;
-        Ok(paddr)
+            *watermark = paddr + length;
+            Ok(paddr)
+        } else {
+            Err(CapabilityErrors::CapabilityMismatch)
+        }
     }
 
     /// Derive and allocate a memory region to a capability that
@@ -124,16 +72,22 @@ impl<'a> UntypedMemoryWrite<'a> {
     /// derived data and an optional next child in the derivation tree.
     /// The function should return the new derived data to store as the
     /// next item in the derivation tree.
-    pub fn derive<T, F>(&mut self, f: F) -> Result<(), CapabilityErrors>
+    pub fn untyped_derive<T, F>(&self, f: F) -> Result<(), CapabilityErrors>
     where
         F: FnOnce(*mut T) -> Result<UnsafeRef<Capability>, CapabilityErrors>,
     {
         let length = core::mem::size_of::<T>();
         let alignment = core::mem::align_of::<T>();
-        let paddr = self.allocate(length, alignment)?;
+        let paddr = self.untyped_allocate(length, alignment)?;
 
-        let f_success = f(unsafe { paddr.as_raw_ptr() })?;
-        self.children.push_front(f_success);
-        Ok(())
+        if let CapabilityEnum::UntypedMemory { children, .. } =
+            &mut *self.capability_data.borrow_mut()
+        {
+            let f_success = f(unsafe { paddr.as_raw_ptr() })?;
+            children.push_front(f_success);
+            Ok(())
+        } else {
+            Err(CapabilityErrors::CapabilityMismatch)
+        }
     }
 }

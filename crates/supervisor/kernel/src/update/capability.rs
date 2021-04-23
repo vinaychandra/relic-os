@@ -1,7 +1,9 @@
+use std::cell::RefCell;
+
 use crate::{addr::PAddrGlobal, util::boxed::Boxed};
 use intrusive_collections::*;
 
-pub mod arch;
+// pub mod arch;
 mod cpool;
 mod untyped;
 
@@ -23,12 +25,12 @@ pub enum CapabilityEnum {
         data: Boxed<CPoolInner>,
     },
     EmptyCap,
-    Arch(arch::ArchCap),
+    // Arch(arch::ArchCap),
 }
 
 #[derive(Debug)]
 pub struct Capability {
-    capability_data: CapabilityEnum,
+    capability_data: RefCell<CapabilityEnum>,
     mem_tree_link: LinkedListLink,
     paging_tree_link: LinkedListLink,
 }
