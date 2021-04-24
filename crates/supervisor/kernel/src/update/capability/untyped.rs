@@ -3,6 +3,15 @@ use relic_utils::align;
 
 use super::*;
 
+#[derive(Debug)]
+pub struct UntypedMemory {
+    pub start_paddr: PAddrGlobal,
+    pub length: Size,
+    pub watermark: PAddrGlobal,
+
+    pub children: LinkedList<MemTreeAdapter>,
+}
+
 impl Capability {
     /// Bootstrap an untyped capability using a memory region information.
     ///
@@ -10,60 +19,42 @@ impl Capability {
     ///
     /// Can only be used for free memory regions returned from bootstrap.
     pub unsafe fn untyped_bootstrap(start_paddr: PAddrGlobal, length: usize) -> Self {
-        let data = CapabilityEnum::UntypedMemory {
+        let data = UntypedMemory {
             start_paddr,
             length,
             watermark: start_paddr,
             children: LinkedList::new(MemTreeAdapter::new()),
         };
         Self {
-            capability_data: RefCell::new(data),
+            capability_data: RefCell::new(CapabilityEnum::UntypedMemory(data)),
             mem_tree_link: LinkedListLink::new(),
             paging_tree_link: LinkedListLink::new(),
         }
     }
+}
 
+impl UntypedMemory {
     /// Get free space in bytes.
-    pub fn untyped_get_free_space(&self) -> Result<Size, CapabilityErrors> {
-        if let CapabilityEnum::UntypedMemory {
-            start_paddr,
-            length,
-            watermark,
-            ..
-        } = &*self.capability_data.borrow()
-        {
-            let len: u64 = (*start_paddr + *length - *watermark).into();
-            Ok(len as usize)
-        } else {
-            Err(CapabilityErrors::CapabilityMismatch)
-        }
+    pub fn get_free_space(&self) -> Size {
+        let len: u64 = (self.start_paddr + self.length - self.watermark).into();
+        len as usize
     }
 
     /// Allocate a memory region using the given length and
     /// alignment. Shift the watermark of the current descriptor
     /// passing over the allocated region.
-    pub fn untyped_allocate(
-        &self,
+    pub fn allocate(
+        &mut self,
         length: usize,
         alignment: usize,
     ) -> Result<PAddrGlobal, CapabilityErrors> {
-        if let CapabilityEnum::UntypedMemory {
-            start_paddr,
-            length: mem_length,
-            watermark,
-            ..
-        } = &mut *self.capability_data.borrow_mut()
-        {
-            let paddr: PAddrGlobal = align::align_up((*watermark).into(), alignment).into();
-            if paddr + length > *start_paddr + *mem_length {
-                return Err(CapabilityErrors::MemoryNotSufficient);
-            }
-
-            *watermark = paddr + length;
-            Ok(paddr)
-        } else {
-            Err(CapabilityErrors::CapabilityMismatch)
+        let paddr: PAddrGlobal = align::align_up((self.watermark).into(), alignment).into();
+        if paddr + length > self.start_paddr + self.length {
+            return Err(CapabilityErrors::MemoryNotSufficient);
         }
+
+        self.watermark = paddr + length;
+        Ok(paddr)
     }
 
     /// Derive and allocate a memory region to a capability that
@@ -72,22 +63,16 @@ impl Capability {
     /// derived data and an optional next child in the derivation tree.
     /// The function should return the new derived data to store as the
     /// next item in the derivation tree.
-    pub fn untyped_derive<T, F>(&self, f: F) -> Result<(), CapabilityErrors>
+    pub fn derive<T, F>(&mut self, f: F) -> Result<UnsafeRef<Capability>, CapabilityErrors>
     where
         F: FnOnce(*mut T) -> Result<UnsafeRef<Capability>, CapabilityErrors>,
     {
         let length = core::mem::size_of::<T>();
         let alignment = core::mem::align_of::<T>();
-        let paddr = self.untyped_allocate(length, alignment)?;
+        let paddr = self.allocate(length, alignment)?;
 
-        if let CapabilityEnum::UntypedMemory { children, .. } =
-            &mut *self.capability_data.borrow_mut()
-        {
-            let f_success = f(unsafe { paddr.as_raw_ptr() })?;
-            children.push_front(f_success);
-            Ok(())
-        } else {
-            Err(CapabilityErrors::CapabilityMismatch)
-        }
+        let f_success = f(unsafe { paddr.as_raw_ptr() })?;
+        self.children.push_front(f_success.clone());
+        Ok(f_success)
     }
 }

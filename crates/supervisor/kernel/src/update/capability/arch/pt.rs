@@ -4,13 +4,13 @@ use super::*;
 use crate::{arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
 
 #[derive(Debug)]
-pub struct L2 {
-    pub page_data: Boxed<[PDEntry; 512]>,
+pub struct L1 {
+    pub page_data: Boxed<[PTEntry; 512]>,
     pub parent_pml4: Option<UnsafeRef<Capability>>,
 }
 
 impl Capability {
-    pub fn pd_retype_from(
+    pub fn pt_retype_from(
         untyped: &mut UntypedMemory,
         cpool_to_store_in: &mut Cpool,
     ) -> Result<(UnsafeRef<Capability>, usize), CapabilityErrors> {
@@ -18,7 +18,7 @@ impl Capability {
 
         let cap = untyped.derive(|memory| {
             unsafe {
-                core::ptr::write(memory, [PDEntry::empty(); 512]);
+                core::ptr::write(memory, [PTEntry::empty(); 512]);
             }
             let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
@@ -28,7 +28,7 @@ impl Capability {
                 Capability {
                     mem_tree_link: LinkedListLink::new(),
                     paging_tree_link: LinkedListLink::new(),
-                    capability_data: RefCell::new(CapabilityEnum::L2(L2 {
+                    capability_data: RefCell::new(CapabilityEnum::L1(L1 {
                         parent_pml4: None,
                         page_data: boxed,
                     })),
@@ -43,7 +43,7 @@ impl Capability {
     }
 }
 
-impl L2 {
+impl L1 {
     pub fn start_paddr(&self) -> PAddrGlobal {
         self.page_data.paddr_global()
     }
@@ -54,29 +54,33 @@ impl L2 {
 }
 
 impl Capability {
-    pub fn l2_map_l1(&self, index: usize, pt_page: &Capability) -> Result<(), CapabilityErrors> {
-        self.l2_create_mut(|l2_write| {
-            if l2_write.page_data[index].is_present() {
+    pub fn l1_map_raw_page(
+        &self,
+        index: usize,
+        raw_page: &Capability,
+    ) -> Result<(), CapabilityErrors> {
+        self.l1_create_mut(|l1_write| {
+            if l1_write.page_data[index].is_present() {
                 return Err(CapabilityErrors::MemoryAlreadyMapped);
             }
 
-            pt_page.l1_create_mut(|pt_page_data| {
-                if pt_page_data.parent_pml4.is_some() {
+            raw_page.raw_page_create_mut(|raw_page| {
+                if raw_page.parent_pml4.is_some() {
                     return Err(CapabilityErrors::MemoryAlreadyMapped);
                 }
 
-                l2_write.page_data[index] = PDEntry::new(
-                    pt_page_data.start_paddr().to_paddr(),
-                    PDEntry::PRESENT | PDEntry::READ_WRITE | PDEntry::USERSPACE,
+                l1_write.page_data[index] = PTEntry::new(
+                    raw_page.start_paddr().to_paddr(),
+                    PTEntry::PRESENT | PTEntry::READ_WRITE | PTEntry::USERSPACE,
                 );
 
-                pt_page_data.parent_pml4 = l2_write.parent_pml4.clone();
+                raw_page.parent_pml4 = l1_write.parent_pml4.clone();
                 Ok(())
             })?;
 
             // Insert the new entry in the mem tree.
-            let refcell = unsafe { UnsafeRef::from_raw(pt_page) };
-            let pml4 = l2_write.parent_pml4.clone().unwrap();
+            let refcell = unsafe { UnsafeRef::from_raw(raw_page) };
+            let pml4 = l1_write.parent_pml4.clone().unwrap();
             pml4.l4_create_mut(|l4| {
                 let ll = &mut l4.children;
                 let mut cursor = unsafe { ll.cursor_mut_from_ptr(self) };

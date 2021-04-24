@@ -1,89 +1,49 @@
 use relic_abi::cap::CapabilityErrors;
 
 use super::*;
-use crate::{arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
+use crate::{addr::VAddr, arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
 
-pub struct PML4Read<'a> {
-    page_data: &'a Boxed<[PML4Entry; 512]>,
-    children: &'a LinkedList<PagingTreeAdapter>,
-}
-
-pub struct PML4Write<'a> {
-    page_data: &'a mut Boxed<[PML4Entry; 512]>,
-    children: &'a mut LinkedList<PagingTreeAdapter>,
+#[derive(Debug)]
+pub struct L4 {
+    pub page_data: Boxed<[PML4Entry; 512]>,
+    pub children: LinkedList<PagingTreeAdapter>,
 }
 
 impl Capability {
-    pub fn pml4_create(&self) -> Option<PML4Read<'_>> {
-        if let CapabilityEnum::Arch(ArchCap::PML4 {
-            page_data,
-            children,
-        }) = &self.capability_data
-        {
-            Some(PML4Read {
-                page_data,
-                children,
-            })
-        } else {
-            None
-        }
-    }
-
-    pub fn pml4_create_mut(&mut self) -> Option<PML4Write<'_>> {
-        if let CapabilityEnum::Arch(ArchCap::PML4 {
-            page_data,
-            children,
-        }) = &mut self.capability_data
-        {
-            Some(PML4Write {
-                page_data,
-                children,
-            })
-        } else {
-            None
-        }
-    }
-
     pub fn pml4_retype_from(
-        untyped: &mut Capability,
-        cpool_to_store_in: &mut CPoolWrite,
+        untyped: &mut UntypedMemory,
+        cpool_to_store_in: &mut Cpool,
     ) -> Result<(UnsafeRef<Capability>, usize), CapabilityErrors> {
-        let mut untyped_data = untyped
-            .untyped_create_mut()
-            .ok_or(CapabilityErrors::CapabilityMismatch)?;
-
         let mut result_index = 0;
-        let mut boxed2 = None;
 
-        untyped_data.derive(|memory| {
+        let result = untyped.derive(|memory| {
             unsafe {
                 core::ptr::write(memory, [PML4Entry::empty(); 512]);
             }
             let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
-            let stored_index = cpool_to_store_in.read().get_free_index()?;
+            let stored_index = cpool_to_store_in.get_free_index()?;
             let cap = cpool_to_store_in.write_to_if_empty(
                 stored_index,
                 Capability {
                     mem_tree_link: LinkedListLink::new(),
                     paging_tree_link: LinkedListLink::new(),
-                    capability_data: CapabilityEnum::Arch(ArchCap::PML4 {
+                    capability_data: RefCell::new(CapabilityEnum::L4(L4 {
                         children: LinkedList::new(PagingTreeAdapter::new()),
                         page_data: boxed,
-                    }),
+                    })),
                 },
             )?;
 
             result_index = stored_index;
-            boxed2 = Some(cap.clone());
             Ok(cap)
         })?;
 
-        Ok((boxed2.unwrap(), result_index))
+        Ok((result, result_index))
     }
 }
 
-impl<'a> PML4Read<'a> {
+impl L4 {
     pub fn start_paddr(&self) -> PAddrGlobal {
         self.page_data.paddr_global()
     }
@@ -93,47 +53,119 @@ impl<'a> PML4Read<'a> {
     }
 }
 
-impl<'a> PML4Write<'a> {
-    pub fn read(&self) -> PML4Read<'_> {
-        PML4Read {
-            children: self.children,
-            page_data: self.page_data,
-        }
-    }
-}
-
 impl Capability {
-    pub fn pml4_map_pdpt(
-        &mut self,
-        index: usize,
-        pdpt_page: &mut Capability,
-    ) -> Result<(), CapabilityErrors> {
+    pub fn l4_map_l3(&self, index: usize, pdpt_page: &Capability) -> Result<(), CapabilityErrors> {
         let unsafe_self = unsafe { UnsafeRef::from_raw(self) };
-        let writer = self
-            .pml4_create_mut()
-            .ok_or(CapabilityErrors::CapabilityMismatch)?;
+        self.l4_create_mut(|l4_write| {
+            if l4_write.page_data[index].is_present() {
+                return Err(CapabilityErrors::MemoryAlreadyMapped);
+            }
 
-        let pdpt_write = pdpt_page
-            .pdpt_create_mut()
-            .ok_or(CapabilityErrors::CapabilityMismatch)?;
+            pdpt_page.l3_create_mut(|pdpt_write| {
+                if pdpt_write.parent_pml4.is_some() {
+                    return Err(CapabilityErrors::MemoryAlreadyMapped);
+                }
 
-        if writer.page_data[index].is_present() {
-            return Err(CapabilityErrors::MemoryAlreadyMapped);
-        }
+                l4_write.page_data[index] = PML4Entry::new(
+                    pdpt_write.start_paddr().to_paddr(),
+                    PML4Entry::PRESENT | PML4Entry::READ_WRITE | PML4Entry::USERSPACE,
+                );
 
-        if pdpt_write.parent_pml4.is_some() {
-            return Err(CapabilityErrors::MemoryAlreadyMapped);
-        }
+                pdpt_write.parent_pml4 = Some(unsafe_self);
+                Ok(())
+            })?;
 
-        writer.page_data[index] = PML4Entry::new(
-            pdpt_write.read().start_paddr().to_paddr(),
-            PML4Entry::PRESENT | PML4Entry::READ_WRITE | PML4Entry::USERSPACE,
-        );
-
-        *pdpt_write.parent_pml4 = Some(unsafe_self);
-        let refcell = unsafe { UnsafeRef::from_raw(pdpt_page) };
-        writer.children.push_front(refcell);
+            let refcell = unsafe { UnsafeRef::from_raw(pdpt_page) };
+            l4_write.children.push_front(refcell);
+            Ok(())
+        })?;
 
         Ok(())
+    }
+
+    pub fn l4_map(
+        &self,
+        vaddr: VAddr,
+        raw_page: &Capability,
+        untyped: &mut UntypedMemory,
+        cpool: &mut Cpool,
+    ) -> Result<(), CapabilityErrors> {
+        let pdpt_cap = {
+            let pml4_index = pml4_index(vaddr);
+            let mut l4_address = PAddrGlobal::new(0);
+
+            if !self.l4_create(|l4_read| {
+                l4_address = l4_read.page_data[pml4_index]
+                    .get_address()
+                    .to_paddr_global();
+                Ok(l4_read.page_data[pml4_index].is_present())
+            })? {
+                let pdpt = Capability::pdpt_retype_from(untyped, cpool)?;
+                self.l4_map_l3(pml4_index, &pdpt.0)?;
+            }
+
+            let l3_cap_index = (0..cpool.size())
+                .position(|i| {
+                    let current = &cpool.data.unsafe_data[i];
+                    current
+                        .l3_create(|l3| Ok(l3.start_paddr() == l4_address))
+                        .unwrap_or(false)
+                })
+                .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
+
+            cpool.lookup_index_unsafe(l3_cap_index)
+        };
+
+        let pd_cap = {
+            let pdpt_index = pdpt_index(vaddr);
+            let mut l3_address = PAddrGlobal::new(0);
+
+            if !pdpt_cap.l3_create(|l3_read| {
+                l3_address = l3_read.page_data[pdpt_index]
+                    .get_address()
+                    .to_paddr_global();
+                Ok(l3_read.page_data[pdpt_index].is_present())
+            })? {
+                let pd = Capability::pd_retype_from(untyped, cpool)?;
+                pdpt_cap.l3_map_l2(pdpt_index, &pd.0)?;
+            }
+
+            let l2_cap_index = (0..cpool.size())
+                .position(|i| {
+                    let current = &cpool.data.unsafe_data[i];
+                    current
+                        .l2_create(|l2| Ok(l2.start_paddr() == l3_address))
+                        .unwrap_or(false)
+                })
+                .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
+
+            cpool.lookup_index_unsafe(l2_cap_index)
+        };
+
+        let pt_cap = {
+            let pd_index = pd_index(vaddr);
+            let mut l2_address = PAddrGlobal::new(0);
+
+            if !pd_cap.l2_create(|l2_read| {
+                l2_address = l2_read.page_data[pd_index].get_address().to_paddr_global();
+                Ok(l2_read.page_data[pd_index].is_present())
+            })? {
+                let pt = Capability::pt_retype_from(untyped, cpool)?;
+                pd_cap.l2_map_l1(pd_index, &pt.0)?;
+            }
+
+            let l1_cap_index = (0..cpool.size())
+                .position(|i| {
+                    let current = &cpool.data.unsafe_data[i];
+                    current
+                        .l1_create(|l1| Ok(l1.start_paddr() == l2_address))
+                        .unwrap_or(false)
+                })
+                .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
+
+            cpool.lookup_index_unsafe(l1_cap_index)
+        };
+
+        pt_cap.l1_map_raw_page(pt_index(vaddr), raw_page)
     }
 }
