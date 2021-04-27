@@ -4,21 +4,38 @@ use super::*;
 use crate::{arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
 
 #[derive(Debug)]
-pub struct L2 {
-    pub page_data: Boxed<[PDEntry; 512]>,
-    pub parent_pml4: Option<UnsafeRef<Capability>>,
+#[repr(C, align(4096))]
+pub struct PDTable([PDEntry; 512]);
+
+impl core::ops::Deref for PDTable {
+    type Target = [PDEntry; 512];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for PDTable {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
-impl Capability {
+#[derive(Debug)]
+pub struct L2 {
+    pub page_data: Boxed<PDTable>,
+    pub parent_pml4: Option<StoredCap>,
+}
+
+impl StoredCap {
     pub fn pd_retype_from(
         untyped: &mut UntypedMemory,
         cpool_to_store_in: &mut Cpool,
-    ) -> Result<(UnsafeRef<Capability>, usize), CapabilityErrors> {
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
         let mut result_index = 0;
 
         let cap = untyped.derive(|memory| {
             unsafe {
-                core::ptr::write(memory, [PDEntry::empty(); 512]);
+                core::ptr::write(memory, PDTable([PDEntry::empty(); 512]));
             }
             let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
@@ -26,12 +43,11 @@ impl Capability {
             let cap = cpool_to_store_in.write_to_if_empty(
                 stored_index,
                 Capability {
-                    mem_tree_link: LinkedListLink::new(),
-                    paging_tree_link: LinkedListLink::new(),
-                    capability_data: RefCell::new(CapabilityEnum::L2(L2 {
+                    capability_data: CapabilityEnum::L2(L2 {
                         parent_pml4: None,
                         page_data: boxed,
-                    })),
+                    }),
+                    ..Default::default()
                 },
             )?;
 
@@ -53,8 +69,10 @@ impl L2 {
     }
 }
 
-impl Capability {
-    pub fn l2_map_l1(&self, index: usize, pt_page: &Capability) -> Result<(), CapabilityErrors> {
+impl StoredCap {
+    pub fn l2_map_l1(&self, index: usize, pt_page: &StoredCap) -> Result<(), CapabilityErrors> {
+        let soon_to_be_second = self.borrow().next_paging_item.clone();
+
         self.l2_create_mut(|l2_write| {
             if l2_write.page_data[index].is_present() {
                 return Err(CapabilityErrors::MemoryAlreadyMapped);
@@ -74,16 +92,16 @@ impl Capability {
                 Ok(())
             })?;
 
-            // Insert the new entry in the mem tree.
-            let refcell = unsafe { UnsafeRef::from_raw(pt_page) };
-            let pml4 = l2_write.parent_pml4.clone().unwrap();
-            pml4.l4_create_mut(|l4| {
-                let ll = &mut l4.children;
-                let mut cursor = unsafe { ll.cursor_mut_from_ptr(self) };
-                cursor.insert_after(refcell);
+            pt_page.borrow_mut().next_mem_item = soon_to_be_second.clone();
+            pt_page.borrow_mut().prev_mem_item = Some(self.clone());
+            if let Some(soon_to_be_sec_val) = soon_to_be_second {
+                soon_to_be_sec_val.borrow_mut().prev_mem_item = Some(pt_page.clone());
+            }
 
-                Ok(())
-            })
-        })
+            Ok(())
+        })?;
+
+        self.borrow_mut().next_mem_item = Some(pt_page.clone());
+        Ok(())
     }
 }

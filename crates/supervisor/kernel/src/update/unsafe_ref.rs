@@ -76,3 +76,9 @@ impl<T: fmt::Debug + ?Sized> fmt::Debug for UnsafeRef<T> {
 unsafe impl<T: ?Sized + Send> Send for UnsafeRef<T> {}
 
 unsafe impl<T: ?Sized + Sync> Sync for UnsafeRef<T> {}
+
+impl<T> From<&T> for UnsafeRef<T> {
+    fn from(val: &T) -> Self {
+        unsafe { UnsafeRef::from_raw(val) }
+    }
+}

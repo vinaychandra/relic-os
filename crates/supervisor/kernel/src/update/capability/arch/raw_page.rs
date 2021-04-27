@@ -8,7 +8,7 @@ use crate::{arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
 #[derive(Debug)]
 pub struct RawPage {
     page_data: Boxed<Inner>,
-    pub parent_pml4: Option<UnsafeRef<Capability>>,
+    pub parent_pml4: Option<StoredCap>,
     pub type_id: TypeId,
 }
 
@@ -16,11 +16,11 @@ pub struct RawPage {
 #[derive(Debug)]
 struct Inner([u8; 4096]);
 
-impl Capability {
+impl StoredCap {
     pub fn raw_page_retype_from<T: 'static>(
         untyped: &mut UntypedMemory,
         cpool_to_store_in: &mut Cpool,
-    ) -> Result<(UnsafeRef<Capability>, usize), CapabilityErrors> {
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
         assert!(core::mem::size_of::<T>() <= 4096);
         assert!(core::mem::align_of::<T>() <= 4096);
         let mut result_index = 0;
@@ -35,13 +35,12 @@ impl Capability {
             let cap = cpool_to_store_in.write_to_if_empty(
                 stored_index,
                 Capability {
-                    mem_tree_link: LinkedListLink::new(),
-                    paging_tree_link: LinkedListLink::new(),
-                    capability_data: RefCell::new(CapabilityEnum::RawPage(RawPage {
+                    capability_data: CapabilityEnum::RawPage(RawPage {
                         parent_pml4: None,
                         page_data: boxed,
                         type_id: TypeId::of::<T>(),
-                    })),
+                    }),
+                    ..Default::default()
                 },
             )?;
 

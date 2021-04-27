@@ -72,7 +72,7 @@ impl Drop for CpoolInner {
     }
 }
 
-impl Capability {
+impl StoredCap {
     pub fn cpool_retype_from(
         untyped_memory: &mut UntypedMemory,
         cpool_to_store_in: &mut Cpool,

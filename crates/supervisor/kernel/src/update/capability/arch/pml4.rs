@@ -4,16 +4,33 @@ use super::*;
 use crate::{addr::VAddr, arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
 
 #[derive(Debug)]
+#[repr(C, align(4096))]
+pub struct PML4Table([PML4Entry; 512]);
+
+impl core::ops::Deref for PML4Table {
+    type Target = [PML4Entry; 512];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl core::ops::DerefMut for PML4Table {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+#[derive(Debug)]
 pub struct L4 {
-    pub page_data: Boxed<[PML4Entry; 512]>,
-    pub children: LinkedList<PagingTreeAdapter>,
+    pub page_data: Boxed<PML4Table>,
 }
 
 impl Capability {
     pub fn pml4_retype_from(
         untyped: &mut UntypedMemory,
         cpool_to_store_in: &mut Cpool,
-    ) -> Result<(UnsafeRef<Capability>, usize), CapabilityErrors> {
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
         let mut result_index = 0;
 
         let result = untyped.derive(|memory| {
@@ -26,12 +43,8 @@ impl Capability {
             let cap = cpool_to_store_in.write_to_if_empty(
                 stored_index,
                 Capability {
-                    mem_tree_link: LinkedListLink::new(),
-                    paging_tree_link: LinkedListLink::new(),
-                    capability_data: RefCell::new(CapabilityEnum::L4(L4 {
-                        children: LinkedList::new(PagingTreeAdapter::new()),
-                        page_data: boxed,
-                    })),
+                    capability_data: CapabilityEnum::L4(L4 { page_data: boxed }),
+                    ..Default::default()
                 },
             )?;
 
@@ -53,9 +66,10 @@ impl L4 {
     }
 }
 
-impl Capability {
-    pub fn l4_map_l3(&self, index: usize, pdpt_page: &Capability) -> Result<(), CapabilityErrors> {
-        let unsafe_self = unsafe { UnsafeRef::from_raw(self) };
+impl StoredCap {
+    pub fn l4_map_l3(&self, index: usize, pdpt_page: &StoredCap) -> Result<(), CapabilityErrors> {
+        let soon_to_be_second = self.borrow().next_paging_item.clone();
+
         self.l4_create_mut(|l4_write| {
             if l4_write.page_data[index].is_present() {
                 return Err(CapabilityErrors::MemoryAlreadyMapped);
@@ -71,22 +85,26 @@ impl Capability {
                     PML4Entry::PRESENT | PML4Entry::READ_WRITE | PML4Entry::USERSPACE,
                 );
 
-                pdpt_write.parent_pml4 = Some(unsafe_self);
+                pdpt_write.parent_pml4 = Some(self.clone());
                 Ok(())
             })?;
 
-            let refcell = unsafe { UnsafeRef::from_raw(pdpt_page) };
-            l4_write.children.push_front(refcell);
+            pdpt_page.borrow_mut().next_mem_item = soon_to_be_second.clone();
+            pdpt_page.borrow_mut().prev_mem_item = Some(self.clone());
+            if let Some(soon_to_be_sec_val) = soon_to_be_second {
+                soon_to_be_sec_val.borrow_mut().prev_mem_item = Some(pdpt_page.clone());
+            }
             Ok(())
         })?;
 
+        self.borrow_mut().next_mem_item = Some(pdpt_page.clone());
         Ok(())
     }
 
     pub fn l4_map(
         &self,
         vaddr: VAddr,
-        raw_page: &Capability,
+        raw_page: &StoredCap,
         untyped: &mut UntypedMemory,
         cpool: &mut Cpool,
     ) -> Result<(), CapabilityErrors> {
@@ -100,13 +118,13 @@ impl Capability {
                     .to_paddr_global();
                 Ok(l4_read.page_data[pml4_index].is_present())
             })? {
-                let pdpt = Capability::pdpt_retype_from(untyped, cpool)?;
+                let pdpt = StoredCap::pdpt_retype_from(untyped, cpool)?;
                 self.l4_map_l3(pml4_index, &pdpt.0)?;
             }
 
             let l3_cap_index = (0..cpool.size())
                 .position(|i| {
-                    let current = &cpool.data.unsafe_data[i];
+                    let current: StoredCap = (&cpool.data.unsafe_data[i]).into();
                     current
                         .l3_create(|l3| Ok(l3.start_paddr() == l4_address))
                         .unwrap_or(false)
@@ -126,13 +144,13 @@ impl Capability {
                     .to_paddr_global();
                 Ok(l3_read.page_data[pdpt_index].is_present())
             })? {
-                let pd = Capability::pd_retype_from(untyped, cpool)?;
+                let pd = StoredCap::pd_retype_from(untyped, cpool)?;
                 pdpt_cap.l3_map_l2(pdpt_index, &pd.0)?;
             }
 
             let l2_cap_index = (0..cpool.size())
                 .position(|i| {
-                    let current = &cpool.data.unsafe_data[i];
+                    let current: StoredCap = (&cpool.data.unsafe_data[i]).into();
                     current
                         .l2_create(|l2| Ok(l2.start_paddr() == l3_address))
                         .unwrap_or(false)
@@ -150,13 +168,13 @@ impl Capability {
                 l2_address = l2_read.page_data[pd_index].get_address().to_paddr_global();
                 Ok(l2_read.page_data[pd_index].is_present())
             })? {
-                let pt = Capability::pt_retype_from(untyped, cpool)?;
+                let pt = StoredCap::pt_retype_from(untyped, cpool)?;
                 pd_cap.l2_map_l1(pd_index, &pt.0)?;
             }
 
             let l1_cap_index = (0..cpool.size())
                 .position(|i| {
-                    let current = &cpool.data.unsafe_data[i];
+                    let current: StoredCap = (&cpool.data.unsafe_data[i]).into();
                     current
                         .l1_create(|l1| Ok(l1.start_paddr() == l2_address))
                         .unwrap_or(false)

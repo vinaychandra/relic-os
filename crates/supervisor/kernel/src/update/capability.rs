@@ -1,15 +1,13 @@
 use relic_abi::cap::CapabilityErrors;
 use std::cell::RefCell;
 
-use crate::{
-    addr::PAddrGlobal, arch::paging::table::*, update::unsafe_ref::UnsafeRef, util::boxed::Boxed,
-};
+use crate::{addr::PAddrGlobal, arch::paging::table::*, update::unsafe_ref::UnsafeRef};
 
-// mod arch;
+mod arch;
 mod cpool;
 mod untyped;
 
-// pub use arch::*;
+pub use arch::*;
 pub use cpool::*;
 pub use untyped::*;
 
@@ -20,6 +18,13 @@ pub enum CapabilityEnum {
     UntypedMemory(UntypedMemory),
     Cpool(Cpool),
     EmptyCap,
+
+    L4(L4),
+    L3(L3),
+    L2(L2),
+    L1(L1),
+
+    RawPage(RawPage),
 }
 
 #[derive(Debug)]
@@ -28,6 +33,9 @@ pub struct Capability {
 
     pub next_mem_item: Option<StoredCap>,
     pub prev_mem_item: Option<StoredCap>,
+
+    pub next_paging_item: Option<StoredCap>,
+    pub prev_paging_item: Option<StoredCap>,
 }
 
 pub type StoredCap = UnsafeRef<RefCell<Capability>>;
@@ -44,6 +52,8 @@ impl Capability {
             capability_data: CapabilityEnum::EmptyCap,
             next_mem_item: None,
             prev_mem_item: None,
+            next_paging_item: None,
+            prev_paging_item: None,
         }
     }
 }
@@ -82,8 +92,8 @@ macro_rules! cap_create {
 
 cap_create!(UntypedMemory);
 cap_create!(Cpool);
-// cap_create!(L4);
-// cap_create!(L3);
-// cap_create!(L2);
-// cap_create!(L1);
-// cap_create!(RawPage);
+cap_create!(L4);
+cap_create!(L3);
+cap_create!(L2);
+cap_create!(L1);
+cap_create!(RawPage);
