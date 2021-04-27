@@ -24,6 +24,8 @@ impl core::ops::DerefMut for PML4Table {
 #[derive(Debug)]
 pub struct L4 {
     pub page_data: Boxed<PML4Table>,
+
+    pub child_paging_item: Option<StoredCap>,
 }
 
 impl Capability {
@@ -43,7 +45,10 @@ impl Capability {
             let cap = cpool_to_store_in.write_to_if_empty(
                 stored_index,
                 Capability {
-                    capability_data: CapabilityEnum::L4(L4 { page_data: boxed }),
+                    capability_data: CapabilityEnum::L4(L4 {
+                        page_data: boxed,
+                        child_paging_item: None,
+                    }),
                     ..Default::default()
                 },
             )?;
@@ -68,15 +73,14 @@ impl L4 {
 
 impl StoredCap {
     pub fn l4_map_l3(&self, index: usize, pdpt_page: &StoredCap) -> Result<(), CapabilityErrors> {
-        let soon_to_be_second = self.borrow().next_paging_item.clone();
-
         self.l4_create_mut(|l4_write| {
             if l4_write.page_data[index].is_present() {
                 return Err(CapabilityErrors::MemoryAlreadyMapped);
             }
+            let soon_to_be_second = l4_write.child_paging_item.clone();
 
             pdpt_page.l3_create_mut(|pdpt_write| {
-                if pdpt_write.parent_pml4.is_some() {
+                if pdpt_write.next_paging_item.is_some() {
                     return Err(CapabilityErrors::MemoryAlreadyMapped);
                 }
 
@@ -85,20 +89,19 @@ impl StoredCap {
                     PML4Entry::PRESENT | PML4Entry::READ_WRITE | PML4Entry::USERSPACE,
                 );
 
-                pdpt_write.parent_pml4 = Some(self.clone());
+                pdpt_write.next_paging_item = soon_to_be_second.clone();
+                pdpt_write.prev_paging_item = Some(self.clone());
                 Ok(())
             })?;
 
-            pdpt_page.borrow_mut().next_paging_item = soon_to_be_second.clone();
-            pdpt_page.borrow_mut().prev_paging_item = Some(self.clone());
             if let Some(soon_to_be_sec_val) = soon_to_be_second {
-                soon_to_be_sec_val.borrow_mut().prev_paging_item = Some(pdpt_page.clone());
+                *soon_to_be_sec_val.borrow_mut().get_prev_paging_item_mut() =
+                    Some(pdpt_page.clone());
             }
-            Ok(())
-        })?;
 
-        self.borrow_mut().next_paging_item = Some(pdpt_page.clone());
-        Ok(())
+            l4_write.child_paging_item = Some(pdpt_page.clone());
+            Ok(())
+        })
     }
 
     pub fn l4_map(

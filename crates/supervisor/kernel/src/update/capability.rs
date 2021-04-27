@@ -33,9 +33,6 @@ pub struct Capability {
 
     pub next_mem_item: Option<StoredCap>,
     pub prev_mem_item: Option<StoredCap>,
-
-    pub next_paging_item: Option<StoredCap>,
-    pub prev_paging_item: Option<StoredCap>,
 }
 
 pub type StoredCap = UnsafeRef<RefCell<Capability>>;
@@ -47,13 +44,31 @@ impl Default for Capability {
 }
 
 impl Capability {
+    pub fn get_next_paging_item_mut(&mut self) -> &mut Option<StoredCap> {
+        match &mut self.capability_data {
+            CapabilityEnum::L3(l) => &mut l.next_paging_item,
+            CapabilityEnum::L2(l) => &mut l.next_paging_item,
+            CapabilityEnum::L1(l) => &mut l.next_paging_item,
+            CapabilityEnum::RawPage(l) => &mut l.next_paging_item,
+            _ => panic!("Unsupported"),
+        }
+    }
+
+    pub fn get_prev_paging_item_mut(&mut self) -> &mut Option<StoredCap> {
+        match &mut self.capability_data {
+            CapabilityEnum::L3(l) => &mut l.prev_paging_item,
+            CapabilityEnum::L2(l) => &mut l.prev_paging_item,
+            CapabilityEnum::L1(l) => &mut l.prev_paging_item,
+            CapabilityEnum::RawPage(l) => &mut l.prev_paging_item,
+            _ => panic!("Unsupported"),
+        }
+    }
+
     pub const fn new() -> Self {
         Self {
             capability_data: CapabilityEnum::EmptyCap,
             next_mem_item: None,
             prev_mem_item: None,
-            next_paging_item: None,
-            prev_paging_item: None,
         }
     }
 }

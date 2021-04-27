@@ -24,7 +24,10 @@ impl core::ops::DerefMut for PDPTTable {
 #[derive(Debug)]
 pub struct L3 {
     pub page_data: Boxed<PDPTTable>,
-    pub parent_pml4: Option<StoredCap>,
+
+    pub child_paging_item: Option<StoredCap>,
+    pub next_paging_item: Option<StoredCap>,
+    pub prev_paging_item: Option<StoredCap>,
 }
 
 impl StoredCap {
@@ -45,8 +48,10 @@ impl StoredCap {
                 stored_index,
                 Capability {
                     capability_data: CapabilityEnum::L3(L3 {
-                        parent_pml4: None,
                         page_data: boxed,
+                        child_paging_item: None,
+                        next_paging_item: None,
+                        prev_paging_item: None,
                     }),
                     ..Default::default()
                 },
@@ -72,37 +77,33 @@ impl L3 {
 
 impl StoredCap {
     pub fn l3_map_l2(&self, index: usize, pd_page: &StoredCap) -> Result<(), CapabilityErrors> {
-        let soon_to_be_second = self.borrow().next_paging_item.clone();
-
         self.l3_create_mut(|l3_write| {
             if l3_write.page_data[index].is_present() {
                 return Err(CapabilityErrors::MemoryAlreadyMapped);
             }
+            let soon_to_be_second = l3_write.child_paging_item.clone();
 
-            pd_page.l2_create_mut(|pd_page| {
-                if pd_page.parent_pml4.is_some() {
+            pd_page.l2_create_mut(|pd_page_data| {
+                if pd_page_data.next_paging_item.is_some() {
                     return Err(CapabilityErrors::MemoryAlreadyMapped);
                 }
 
                 l3_write.page_data[index] = PDPTEntry::new(
-                    pd_page.start_paddr().to_paddr(),
+                    pd_page_data.start_paddr().to_paddr(),
                     PDPTEntry::PRESENT | PDPTEntry::READ_WRITE | PDPTEntry::USERSPACE,
                 );
 
-                pd_page.parent_pml4 = l3_write.parent_pml4.clone();
+                pd_page_data.next_paging_item = soon_to_be_second.clone();
+                pd_page_data.prev_paging_item = Some(self.clone());
                 Ok(())
             })?;
 
-            pd_page.borrow_mut().next_paging_item = soon_to_be_second.clone();
-            pd_page.borrow_mut().prev_paging_item = Some(self.clone());
             if let Some(soon_to_be_sec_val) = soon_to_be_second {
-                soon_to_be_sec_val.borrow_mut().prev_paging_item = Some(pd_page.clone());
+                *soon_to_be_sec_val.borrow_mut().get_prev_paging_item_mut() = Some(pd_page.clone());
             }
 
+            l3_write.child_paging_item = Some(pd_page.clone());
             Ok(())
-        })?;
-
-        self.borrow_mut().next_paging_item = Some(pd_page.clone());
-        Ok(())
+        })
     }
 }

@@ -8,8 +8,10 @@ use crate::{arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
 #[derive(Debug)]
 pub struct RawPage {
     page_data: Boxed<Inner>,
-    pub parent_pml4: Option<StoredCap>,
     pub type_id: TypeId,
+
+    pub next_paging_item: Option<StoredCap>,
+    pub prev_paging_item: Option<StoredCap>,
 }
 
 #[repr(align(4096))]
@@ -36,7 +38,8 @@ impl StoredCap {
                 stored_index,
                 Capability {
                     capability_data: CapabilityEnum::RawPage(RawPage {
-                        parent_pml4: None,
+                        next_paging_item: None,
+                        prev_paging_item: None,
                         page_data: boxed,
                         type_id: TypeId::of::<T>(),
                     }),
