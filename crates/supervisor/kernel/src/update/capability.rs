@@ -97,3 +97,12 @@ cap_create!(L3);
 cap_create!(L2);
 cap_create!(L1);
 cap_create!(RawPage);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_size() {
+        assert_eq!(64, core::mem::size_of::<RefCell<Capability>>());
+    }
+}

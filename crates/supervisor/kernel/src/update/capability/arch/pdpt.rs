@@ -93,16 +93,16 @@ impl StoredCap {
                 Ok(())
             })?;
 
-            pd_page.borrow_mut().next_mem_item = soon_to_be_second.clone();
-            pd_page.borrow_mut().prev_mem_item = Some(self.clone());
+            pd_page.borrow_mut().next_paging_item = soon_to_be_second.clone();
+            pd_page.borrow_mut().prev_paging_item = Some(self.clone());
             if let Some(soon_to_be_sec_val) = soon_to_be_second {
-                soon_to_be_sec_val.borrow_mut().prev_mem_item = Some(pd_page.clone());
+                soon_to_be_sec_val.borrow_mut().prev_paging_item = Some(pd_page.clone());
             }
 
             Ok(())
         })?;
 
-        self.borrow_mut().next_mem_item = Some(pd_page.clone());
+        self.borrow_mut().next_paging_item = Some(pd_page.clone());
         Ok(())
     }
 }
