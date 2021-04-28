@@ -1,109 +1,24 @@
 use relic_abi::cap::CapabilityErrors;
 
 use super::*;
-use crate::{addr::VAddr, arch::globals::BASE_PAGE_LENGTH, util::boxed::Boxed};
-
-#[derive(Debug)]
-#[repr(C, align(4096))]
-pub struct PML4Table([PML4Entry; 512]);
-
-impl core::ops::Deref for PML4Table {
-    type Target = [PML4Entry; 512];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl core::ops::DerefMut for PML4Table {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
+use crate::{addr::VAddr, util::boxed::Boxed};
 
 #[derive(Debug)]
 pub struct L4 {
     pub page_data: Boxed<PML4Table>,
-
     pub child_paging_item: Option<StoredCap>,
 }
 
-impl Capability {
-    pub fn pml4_retype_from(
-        untyped: &mut UntypedMemory,
-        cpool_to_store_in: &mut Cpool,
-    ) -> Result<(StoredCap, usize), CapabilityErrors> {
-        let mut result_index = 0;
-
-        let result = untyped.derive(|memory| {
-            unsafe {
-                core::ptr::write(memory, [PML4Entry::empty(); 512]);
-            }
-            let boxed = unsafe { Boxed::new((memory as u64).into()) };
-
-            let stored_index = cpool_to_store_in.get_free_index()?;
-            let cap = cpool_to_store_in.write_to_if_empty(
-                stored_index,
-                Capability {
-                    capability_data: CapabilityEnum::L4(L4 {
-                        page_data: boxed,
-                        child_paging_item: None,
-                    }),
-                    ..Default::default()
-                },
-            )?;
-
-            result_index = stored_index;
-            Ok(cap)
-        })?;
-
-        Ok((result, result_index))
-    }
-}
-
 impl L4 {
-    pub fn start_paddr(&self) -> PAddrGlobal {
-        self.page_data.paddr_global()
-    }
-
-    pub fn length(&self) -> usize {
-        BASE_PAGE_LENGTH
+    pub fn new(boxed: Boxed<PML4Table>) -> Self {
+        Self {
+            page_data: boxed,
+            child_paging_item: None,
+        }
     }
 }
 
 impl StoredCap {
-    pub fn l4_map_l3(&self, index: usize, pdpt_page: &StoredCap) -> Result<(), CapabilityErrors> {
-        self.l4_create_mut(|l4_write| {
-            if l4_write.page_data[index].is_present() {
-                return Err(CapabilityErrors::MemoryAlreadyMapped);
-            }
-            let soon_to_be_second = l4_write.child_paging_item.clone();
-
-            pdpt_page.l3_create_mut(|pdpt_write| {
-                if pdpt_write.next_paging_item.is_some() {
-                    return Err(CapabilityErrors::MemoryAlreadyMapped);
-                }
-
-                l4_write.page_data[index] = PML4Entry::new(
-                    pdpt_write.start_paddr().to_paddr(),
-                    PML4Entry::PRESENT | PML4Entry::READ_WRITE | PML4Entry::USERSPACE,
-                );
-
-                pdpt_write.next_paging_item = soon_to_be_second.clone();
-                pdpt_write.prev_paging_item = Some(self.clone());
-                Ok(())
-            })?;
-
-            if let Some(soon_to_be_sec_val) = soon_to_be_second {
-                *soon_to_be_sec_val.borrow_mut().get_prev_paging_item_mut() =
-                    Some(pdpt_page.clone());
-            }
-
-            l4_write.child_paging_item = Some(pdpt_page.clone());
-            Ok(())
-        })
-    }
-
     pub fn l4_map(
         &self,
         vaddr: VAddr,
