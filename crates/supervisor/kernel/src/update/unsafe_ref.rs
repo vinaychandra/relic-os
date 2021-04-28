@@ -66,10 +66,17 @@ impl<T: ?Sized> Borrow<T> for UnsafeRef<T> {
     }
 }
 
+// impl<T: fmt::Debug + ?Sized> fmt::Debug for UnsafeRef<T> {
+//     #[inline]
+//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+//         fmt::Debug::fmt(self.as_ref(), f)
+//     }
+// }
+
 impl<T: fmt::Debug + ?Sized> fmt::Debug for UnsafeRef<T> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Debug::fmt(self.as_ref(), f)
+        f.write_fmt(format_args!("UnsafeCell {:p}", self.ptr))
     }
 }
 

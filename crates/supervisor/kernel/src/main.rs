@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(test, allow(unused_imports))]
+#![cfg_attr(test, feature(new_uninit))]
 #![cfg_attr(not(test), no_main)]
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
@@ -55,6 +56,9 @@ extern crate lazy_static;
 
 #[macro_use]
 extern crate paste;
+
+#[macro_use]
+extern crate static_assertions;
 
 pub mod arch;
 pub mod logging;

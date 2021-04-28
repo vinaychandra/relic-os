@@ -12,20 +12,20 @@ pub struct UntypedMemory {
     child_mem_item: Option<StoredCap>,
 }
 
-impl Capability {
+impl UntypedMemory {
     /// Bootstrap an untyped capability using a memory region information.
     ///
     /// # Safety
     ///
     /// Can only be used for free memory regions returned from bootstrap.
-    pub unsafe fn untyped_bootstrap(start_paddr: PAddrGlobal, length: usize) -> Self {
+    pub unsafe fn bootstrap(start_paddr: PAddrGlobal, length: usize) -> Capability {
         let data = UntypedMemory {
             start_paddr,
             length,
             watermark: start_paddr,
             child_mem_item: None,
         };
-        Self {
+        Capability {
             capability_data: CapabilityEnum::UntypedMemory(data),
             ..Default::default()
         }
@@ -67,12 +67,20 @@ impl UntypedMemory {
     /// derived data and an optional next child in the derivation tree.
     /// The function should return the new derived data to store as the
     /// next item in the derivation tree.
-    pub fn derive<T, F>(&mut self, f: F) -> Result<StoredCap, CapabilityErrors>
+    pub fn derive<T, F>(
+        &mut self,
+        alignment: Option<usize>,
+        f: F,
+    ) -> Result<StoredCap, CapabilityErrors>
     where
         F: FnOnce(*mut T) -> Result<StoredCap, CapabilityErrors>,
     {
         let length = core::mem::size_of::<T>();
-        let alignment = core::mem::align_of::<T>();
+        let alignment = if let Some(align_val) = alignment {
+            align_val
+        } else {
+            core::mem::align_of::<T>()
+        };
         let paddr = self.allocate(length, alignment)?;
 
         let f_success = f(unsafe { paddr.as_raw_ptr() })?;

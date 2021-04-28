@@ -47,8 +47,42 @@ impl Cpool {
         }
     }
 
-    pub fn lookup_index_unsafe(&self, index: usize) -> StoredCap {
-        unsafe { UnsafeRef::from_raw(&self.data.unsafe_data[index as usize]) }
+    pub fn search_fn<F: FnMut(StoredCap) -> bool>(
+        &self,
+        mut search_fn: F,
+    ) -> Result<StoredCap, CapabilityErrors> {
+        self.search_fn_with_depth(&mut search_fn, 0)
+    }
+
+    fn search_fn_with_depth<F: FnMut(StoredCap) -> bool>(
+        &self,
+        search_fn: &mut F,
+        depth: u8,
+    ) -> Result<StoredCap, CapabilityErrors> {
+        if depth > 5 {
+            return Err(CapabilityErrors::CapabilitySearchFailed);
+        }
+
+        self.data
+            .unsafe_data
+            .iter()
+            .find_map(|val| {
+                let cap: StoredCap = val.into();
+
+                let cpool_search =
+                    cap.cpool_create(|cpool| cpool.search_fn_with_depth(search_fn, depth + 1));
+                if cpool_search.is_ok() {
+                    return cpool_search.ok();
+                }
+
+                let user_search = search_fn(cap.clone());
+                if user_search {
+                    return Some(cap);
+                }
+
+                None
+            })
+            .ok_or(CapabilityErrors::CapabilitySearchFailed)
     }
 
     pub fn write_to_if_empty(
@@ -66,12 +100,6 @@ impl Cpool {
     }
 }
 
-impl Drop for CpoolInner {
-    fn drop(&mut self) {
-        todo!("CpoolInner drop not supproted")
-    }
-}
-
 impl StoredCap {
     pub fn cpool_retype_from(
         untyped_memory: &mut UntypedMemory,
@@ -85,25 +113,28 @@ impl StoredCap {
 
         let mut result_index = 0;
 
-        let location = untyped_memory.derive(|memory: *mut CpoolInner| {
-            unsafe {
-                core::ptr::write(memory, new);
-            }
-            let boxed = unsafe { Boxed::new((memory as u64).into()) };
+        let location = untyped_memory.derive(
+            Some(core::mem::align_of::<CpoolInner>()),
+            |memory: *mut CpoolInner| {
+                unsafe {
+                    core::ptr::write(memory, new);
+                }
+                let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
-            let cpool_location_to_store = cpool_to_store_in.get_free_index()?;
+                let cpool_location_to_store = cpool_to_store_in.get_free_index()?;
 
-            let location = cpool_to_store_in.write_to_if_empty(
-                cpool_location_to_store,
-                Capability {
-                    capability_data: CapabilityEnum::Cpool(Cpool { data: boxed }),
-                    ..Default::default()
-                },
-            )?;
+                let location = cpool_to_store_in.write_to_if_empty(
+                    cpool_location_to_store,
+                    Capability {
+                        capability_data: CapabilityEnum::Cpool(Cpool { data: boxed }),
+                        ..Default::default()
+                    },
+                )?;
 
-            result_index = cpool_location_to_store;
-            Ok(location)
-        })?;
+                result_index = cpool_location_to_store;
+                Ok(location)
+            },
+        )?;
 
         Ok((location, result_index))
     }

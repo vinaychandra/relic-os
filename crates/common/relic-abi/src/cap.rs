@@ -19,6 +19,8 @@ pub enum CapabilityErrors {
     MemoryAlreadyMapped,
     /// Out of memory error.
     MemoryNotSufficient,
+    /// Alignment for memory is unexpected.
+    MemoryAlignmentFailure,
     /// The passed memory address is invalid.
     InvalidMemoryAddress,
 

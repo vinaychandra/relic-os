@@ -19,7 +19,7 @@ static-alloc = "0.2.2"
 elfloader = "0.11"
 crossbeam-utils = { version = "0.8.3", default-features = false }
 paste = "1.0"
-enum_variant_type = "0.2.1"
+static_assertions = "1.1.0"
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 apic = { git = "https://github.com/rust-osdev/apic", rev = "c662e70" }

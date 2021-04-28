@@ -24,8 +24,14 @@ pub enum CapabilityEnum {
     L2(L2),
     L1(L1),
 
-    RawPage(RawPage),
+    BasePage(BasePage),
+    LargePage(LargePage),
+    HugePage(HugePage),
 }
+
+pub type BasePage = RawPageActual<0x1000>;
+pub type LargePage = RawPageActual<0x20_0000>;
+pub type HugePage = RawPageActual<0x4000_0000>;
 
 #[derive(Debug)]
 pub struct Capability {
@@ -34,6 +40,9 @@ pub struct Capability {
     pub next_mem_item: Option<StoredCap>,
     pub prev_mem_item: Option<StoredCap>,
 }
+
+// fixed 64 byte sized assertion for capability.
+assert_eq_size!([u8; 64], RefCell<Capability>);
 
 pub type StoredCap = UnsafeRef<RefCell<Capability>>;
 
@@ -49,7 +58,9 @@ impl Capability {
             CapabilityEnum::L3(l) => &mut l.next_paging_item,
             CapabilityEnum::L2(l) => &mut l.next_paging_item,
             CapabilityEnum::L1(l) => &mut l.next_paging_item,
-            CapabilityEnum::RawPage(l) => &mut l.next_paging_item,
+            CapabilityEnum::BasePage(l) => &mut l.next_paging_item,
+            CapabilityEnum::LargePage(l) => &mut l.next_paging_item,
+            CapabilityEnum::HugePage(l) => &mut l.next_paging_item,
             _ => panic!("Unsupported"),
         }
     }
@@ -59,7 +70,9 @@ impl Capability {
             CapabilityEnum::L3(l) => &mut l.prev_paging_item,
             CapabilityEnum::L2(l) => &mut l.prev_paging_item,
             CapabilityEnum::L1(l) => &mut l.prev_paging_item,
-            CapabilityEnum::RawPage(l) => &mut l.prev_paging_item,
+            CapabilityEnum::BasePage(l) => &mut l.prev_paging_item,
+            CapabilityEnum::LargePage(l) => &mut l.prev_paging_item,
+            CapabilityEnum::HugePage(l) => &mut l.prev_paging_item,
             _ => panic!("Unsupported"),
         }
     }
@@ -111,13 +124,6 @@ cap_create!(L4);
 cap_create!(L3);
 cap_create!(L2);
 cap_create!(L1);
-cap_create!(RawPage);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_size() {
-        assert_eq!(64, core::mem::size_of::<RefCell<Capability>>());
-    }
-}
+cap_create!(BasePage);
+cap_create!(LargePage);
+cap_create!(HugePage);
