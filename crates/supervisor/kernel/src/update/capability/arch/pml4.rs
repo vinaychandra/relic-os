@@ -16,6 +16,14 @@ impl L4 {
             child_paging_item: None,
         }
     }
+
+    pub fn switch_to(&mut self) {
+        use crate::arch::paging;
+
+        unsafe {
+            paging::utils::switch_to(self.page_data.paddr_global().to_paddr());
+        }
+    }
 }
 
 impl StoredCap {

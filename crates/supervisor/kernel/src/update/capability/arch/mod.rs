@@ -65,7 +65,7 @@ macro_rules! paging_cap_impl {
                         Some(core::mem::size_of::<[< $inner Table >]>()),
                         |memory: *mut [< $inner Table >]| {
                             unsafe {
-                                core::ptr::write(memory, [< $inner Table >]([[< $inner Entry >]::empty(); 512]));
+                                core::ptr::write_bytes(memory as *mut u8, 0, 4096);
                             }
                             let boxed = unsafe { Boxed::new((memory as u64).into()) };
 

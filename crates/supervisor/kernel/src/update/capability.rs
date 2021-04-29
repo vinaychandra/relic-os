@@ -1,14 +1,16 @@
-use relic_abi::cap::CapabilityErrors;
+use relic_abi::{cap::CapabilityErrors, syscall::TaskBuffer};
 use std::cell::RefCell;
 
 use crate::{addr::PAddrGlobal, arch::paging::table::*, update::unsafe_ref::UnsafeRef};
 
 mod arch;
 mod cpool;
+pub mod task;
 mod untyped;
 
 pub use arch::*;
 pub use cpool::*;
+pub use task::*;
 pub use untyped::*;
 
 type Size = usize;
@@ -27,11 +29,15 @@ pub enum CapabilityEnum {
     BasePage(BasePage),
     LargePage(LargePage),
     HugePage(HugePage),
+
+    Task(Task),
+    TaskBufferCap(TaskBufferCap),
 }
 
-pub type BasePage = RawPageActual<0x1000>;
-pub type LargePage = RawPageActual<0x20_0000>;
-pub type HugePage = RawPageActual<0x4000_0000>;
+pub type BasePage = RawPageActual<[u8; 0x1000], 0x1000>;
+pub type LargePage = RawPageActual<[u8; 0x20_0000], 0x20_0000>;
+pub type HugePage = RawPageActual<[u8; 0x4000_0000], 0x4000_0000>;
+pub type TaskBufferCap = RawPageActual<TaskBuffer, 0x1000>;
 
 #[derive(Debug)]
 pub struct Capability {
@@ -53,6 +59,20 @@ impl Default for Capability {
 }
 
 impl Capability {
+    pub fn get_next_task_item_mut(&mut self) -> &mut Option<StoredCap> {
+        match &mut self.capability_data {
+            CapabilityEnum::Task(l) => &mut l.next_task_item,
+            _ => panic!("Unsupported"),
+        }
+    }
+
+    pub fn get_prev_task_item_mut(&mut self) -> &mut Option<StoredCap> {
+        match &mut self.capability_data {
+            CapabilityEnum::Task(l) => &mut l.prev_task_item,
+            _ => panic!("Unsupported"),
+        }
+    }
+
     pub fn get_next_paging_item_mut(&mut self) -> &mut Option<StoredCap> {
         match &mut self.capability_data {
             CapabilityEnum::L3(l) => &mut l.next_paging_item,
@@ -127,3 +147,5 @@ cap_create!(L1);
 cap_create!(BasePage);
 cap_create!(LargePage);
 cap_create!(HugePage);
+cap_create!(Task);
+cap_create!(TaskBufferCap);
