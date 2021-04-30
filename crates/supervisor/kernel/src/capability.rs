@@ -1,14 +1,12 @@
-use relic_abi::{cap::CapabilityErrors, syscall::TaskBuffer};
+use relic_abi::cap::CapabilityErrors;
 use std::cell::RefCell;
 
-use crate::{addr::PAddrGlobal, arch::paging::table::*, update::unsafe_ref::UnsafeRef};
+use crate::{addr::PAddrGlobal, arch::capability::paging::*, util::unsafe_ref::UnsafeRef};
 
-mod arch;
 mod cpool;
 pub mod task;
 mod untyped;
 
-pub use arch::*;
 pub use cpool::*;
 pub use task::*;
 pub use untyped::*;
@@ -31,17 +29,15 @@ pub enum CapabilityEnum {
     HugePage(HugePage),
 
     Task(Task),
-    TaskBufferCap(TaskBufferCap),
 }
 
-pub type BasePage = RawPageActual<[u8; 0x1000], 0x1000>;
-pub type LargePage = RawPageActual<[u8; 0x20_0000], 0x20_0000>;
-pub type HugePage = RawPageActual<[u8; 0x4000_0000], 0x4000_0000>;
-pub type TaskBufferCap = RawPageActual<TaskBuffer, 0x1000>;
+pub type BasePage = RawPageActual<0x1000>;
+pub type LargePage = RawPageActual<0x20_0000>;
+pub type HugePage = RawPageActual<0x4000_0000>;
 
 #[derive(Debug)]
 pub struct Capability {
-    capability_data: CapabilityEnum,
+    pub capability_data: CapabilityEnum,
 
     pub next_mem_item: Option<StoredCap>,
     pub prev_mem_item: Option<StoredCap>,
@@ -148,4 +144,11 @@ cap_create!(BasePage);
 cap_create!(LargePage);
 cap_create!(HugePage);
 cap_create!(Task);
-cap_create!(TaskBufferCap);
+
+bitflags! {
+    /// Permissions for the current page.
+    pub struct MapPermissions : u8 {
+        const WRITE     = 0b0000_0010;
+        const EXECUTE   = 0b0000_0100;
+    }
+}

@@ -12,6 +12,7 @@ pub enum CapabilityErrors {
     CapabilitySlotsFull,
     /// A search for a capability or an empty slot failed.
     CapabilitySearchFailed,
+    CapabilitySearchFailedPartial,
     /// The requested capability and provided capabilities mismatch.
     CapabilityMismatch,
 

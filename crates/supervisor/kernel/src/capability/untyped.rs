@@ -1,63 +1,41 @@
-use std::mem;
-
 use relic_abi::cap::CapabilityErrors;
 use relic_utils::align;
-use spin::RwLock;
 
-use crate::{
-    addr::PAddrGlobal,
-    util::managed_arc::{ManagedArc, ManagedArcAny},
-};
+use super::*;
 
-/// Untyped memory descriptor. Represents a
-/// chunk of physical memory.
-#[derive(Getters, Debug)]
-pub struct UntypedDescriptor {
-    /// Start physical address of the untyped region.
-    #[getset(get = "pub")]
+#[derive(Debug, CopyGetters)]
+pub struct UntypedMemory {
     start_paddr: PAddrGlobal,
-    /// Length of the untyped region.
-    #[getset(get = "pub")]
-    length: usize,
+    #[getset(get_copy = "pub")]
+    length: Size,
     watermark: PAddrGlobal,
 
-    first_child: Option<ManagedArcAny>,
+    child_mem_item: Option<StoredCap>,
 }
-/// Untyped capability. Reference-counted smart pointer to untyped
-/// descriptor.
-///
-/// Untyped capability represents free memory that can be retyped to
-/// different useful capabilities.
-pub type UntypedCap = ManagedArc<RwLock<UntypedDescriptor>>;
 
-impl UntypedCap {
+impl UntypedMemory {
     /// Bootstrap an untyped capability using a memory region information.
     ///
     /// # Safety
     ///
-    /// Can only be used for free memory regions returned from
-    /// `InitInfo`.
-    pub unsafe fn bootstrap(start_paddr: PAddrGlobal, length: usize) -> Self {
-        let start_paddr_usize: usize = start_paddr.into();
-        let des_paddr: PAddrGlobal =
-            align::align_up(start_paddr_usize, UntypedCap::inner_type_alignment()).into();
-        assert!(des_paddr + UntypedCap::inner_type_length() <= start_paddr + length);
-
-        Self::new(
-            des_paddr.into(),
-            RwLock::new(UntypedDescriptor {
-                start_paddr,
-                length,
-                watermark: des_paddr + UntypedCap::inner_type_length(),
-                first_child: None,
-            }),
-        )
+    /// Can only be used for free memory regions returned from bootstrap.
+    pub unsafe fn bootstrap(start_paddr: PAddrGlobal, length: usize) -> Capability {
+        let data = UntypedMemory {
+            start_paddr,
+            length,
+            watermark: start_paddr,
+            child_mem_item: None,
+        };
+        Capability {
+            capability_data: CapabilityEnum::UntypedMemory(data),
+            ..Default::default()
+        }
     }
 }
 
-impl UntypedDescriptor {
+impl UntypedMemory {
     /// Get free space in bytes.
-    pub fn get_free_space(&self) -> usize {
+    pub fn get_free_space(&self) -> Size {
         let len: u64 = (self.start_paddr + self.length - self.watermark).into();
         len as usize
     }
@@ -65,12 +43,12 @@ impl UntypedDescriptor {
     /// Allocate a memory region using the given length and
     /// alignment. Shift the watermark of the current descriptor
     /// passing over the allocated region.
-    pub unsafe fn allocate(
+    pub fn allocate(
         &mut self,
         length: usize,
         alignment: usize,
     ) -> Result<PAddrGlobal, CapabilityErrors> {
-        let paddr: PAddrGlobal = align::align_up(self.watermark.into(), alignment).into();
+        let paddr: PAddrGlobal = align::align_up((self.watermark).into(), alignment).into();
         if paddr + length > self.start_paddr + self.length {
             return Err(CapabilityErrors::MemoryNotSufficient);
         }
@@ -79,77 +57,48 @@ impl UntypedDescriptor {
         Ok(paddr)
     }
 
+    pub fn can_allocate(&self, length: usize, alignment: usize) -> bool {
+        let paddr: PAddrGlobal = align::align_up((self.watermark).into(), alignment).into();
+        paddr + length <= self.start_paddr + self.length
+    }
+
     /// Derive and allocate a memory region to a capability that
     /// requires memory region.
     /// The provided function is given the new PAddr to store the new
     /// derived data and an optional next child in the derivation tree.
     /// The function should return the new derived data to store as the
     /// next item in the derivation tree.
-    pub unsafe fn derive<F>(
+    pub fn derive<T, F>(
         &mut self,
-        length: usize,
-        alignment: usize,
+        alignment: Option<usize>,
         f: F,
-    ) -> Result<(), CapabilityErrors>
+    ) -> Result<StoredCap, CapabilityErrors>
     where
-        F: FnOnce(PAddrGlobal, Option<ManagedArcAny>) -> ManagedArcAny,
+        F: FnOnce(*mut T) -> Result<StoredCap, CapabilityErrors>,
     {
+        let length = core::mem::size_of::<T>();
+        let alignment = if let Some(align_val) = alignment {
+            align_val
+        } else {
+            core::mem::align_of::<T>()
+        };
         let paddr = self.allocate(length, alignment)?;
-        self.first_child = Some(f(paddr, self.first_child.take()));
-        Ok(())
-    }
-}
 
-impl Drop for UntypedDescriptor {
-    fn drop(&mut self) {
-        if let Some(child) = self.first_child.take() {
-            mem::drop(child)
-        }
-    }
-}
+        let f_success = f(unsafe { paddr.as_raw_ptr() })?;
 
-#[cfg(test)]
-mod tests {
-    use std::mem::MaybeUninit;
-
-    use super::*;
-
-    #[test]
-    fn test_untyped_memory() {
-        let underlying_value: Box<MaybeUninit<[u64; 4096]>> = Box::new(MaybeUninit::uninit());
-        let box_addr = Box::into_raw(underlying_value) as u64;
-        let addr = PAddrGlobal::new(box_addr);
-
-        let untyped_memory = unsafe { UntypedCap::bootstrap(addr, 4096) };
         {
-            unsafe {
-                untyped_memory
-                    .write()
-                    .derive(100, 4, |a, b| {
-                        assert!(b.is_none());
-                        let child = UntypedCap::bootstrap(a, 100);
-                        child.write().first_child = b;
-                        child
-                    })
-                    .unwrap();
+            let mut fs_write = f_success.borrow_mut();
 
-                assert_eq!(
-                    Err(CapabilityErrors::MemoryNotSufficient),
-                    untyped_memory.write().derive(4000, 4, |_, _| {
-                        unreachable!("Unexpected succesful allocated")
-                    })
-                );
-
-                untyped_memory
-                    .write()
-                    .derive(100, 4, |a, b| {
-                        assert!(b.is_some());
-                        let child = UntypedCap::bootstrap(a, 100);
-                        child.write().first_child = b;
-                        child
-                    })
-                    .unwrap();
+            let to_be_second = self.child_mem_item.take();
+            if let Some(ref sec) = to_be_second {
+                let mut sec_write = sec.borrow_mut();
+                sec_write.prev_mem_item = Some(f_success.clone());
             }
+
+            fs_write.next_mem_item = to_be_second;
+            self.child_mem_item = Some(f_success.clone());
         }
+
+        Ok(f_success)
     }
 }

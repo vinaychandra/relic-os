@@ -175,3 +175,9 @@ impl VAddr {
         &mut *(self.0 as *mut T)
     }
 }
+
+impl<T> From<*const T> for VAddr {
+    fn from(ptr: *const T) -> Self {
+        Self(ptr as _)
+    }
+}

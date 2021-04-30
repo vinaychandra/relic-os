@@ -1,14 +1,18 @@
-use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
+use relic_abi::{
+    cap::CapabilityErrors,
+    syscall::{SystemCall, TaskBuffer},
+};
 
 use crate::{
     addr::VAddr,
-    arch::capability::TopPageTableCap,
-    capability::{
-        CPoolCap, MapPermissions, RawPageCap, Scheduler, TaskCap, TaskStatus, UntypedCap,
-    },
+    capability::{MapPermissions, Scheduler, StoredCap, TaskStatus},
 };
 
-pub fn process_syscall(source_task: &TaskCap, syscall: Option<SystemCall>, scheduler: &Scheduler) {
+pub fn process_syscall(
+    source_task: &StoredCap,
+    syscall: Option<SystemCall>,
+    scheduler: &Scheduler,
+) {
     if syscall.is_none() {
         set_result_and_schedule(
             source_task,
@@ -18,10 +22,15 @@ pub fn process_syscall(source_task: &TaskCap, syscall: Option<SystemCall>, sched
         return;
     }
 
-    let cpool: CPoolCap = source_task
-        .read()
-        .upgrade_cpool()
-        .expect("CPool cannot be found!");
+    let cpool: StoredCap = source_task
+        .task_create_mut(|t| {
+            Ok(t.descriptor
+                .get_or_insert_with(|| unreachable!())
+                .cpool()
+                .clone()
+                .expect("CPool cannot be found"))
+        })
+        .unwrap();
 
     let syscall = syscall.unwrap();
     match syscall {
@@ -30,44 +39,58 @@ pub fn process_syscall(source_task: &TaskCap, syscall: Option<SystemCall>, sched
             return;
         }
         SystemCall::UntypedTotalFree(caddr) => {
-            let untyped_op: Option<UntypedCap> = cpool.lookup_upgrade(caddr);
-            if let Some(untyped) = untyped_op {
-                let data = (
-                    CapabilityErrors::None,
-                    *untyped.read().length() as u64,
-                    untyped.read().get_free_space() as u64,
-                );
-                set_result_and_schedule(source_task, data, scheduler);
-            } else {
-                set_result_and_schedule(
+            let result = || -> Result<(u64, u64), CapabilityErrors> {
+                cpool.cpool_create(|cpool| {
+                    let untyped_op = cpool.lookup(caddr);
+                    if let Some(untyped_data) = untyped_op {
+                        untyped_data.untyped_memory_create(|untyped| {
+                            Ok((untyped.length() as u64, untyped.get_free_space() as u64))
+                        })
+                    } else {
+                        Err(CapabilityErrors::CapabilityMismatch)
+                    }
+                })
+            };
+
+            match result() {
+                std::result::Result::Ok(r) => set_result_and_schedule(
                     source_task,
-                    (CapabilityErrors::CapabilityMismatch, 0, 0),
+                    (CapabilityErrors::None, r.0, r.1),
                     scheduler,
-                );
+                ),
+                std::result::Result::Err(e) => {
+                    set_result_and_schedule(source_task, (e, 0, 0), scheduler)
+                }
             }
             return;
         }
         SystemCall::RawPageRetype { untyped_memory } => {
-            let untyped_op: Option<UntypedCap> = cpool.lookup_upgrade(untyped_memory);
-            if let Some(untyped) = untyped_op {
-                let mut result = CapabilityErrors::None;
-                let mut cpool_index: u64 = 0;
-                let raw_page_cap_result = RawPageCap::retype_from(&mut untyped.write());
-                match raw_page_cap_result {
-                    Ok(raw_page_cap) => match cpool.write().downgrade_any_free(raw_page_cap) {
-                        Ok(index) => cpool_index = index as u64,
-                        Err(e) => result = e,
-                    },
-                    Err(a) => result = a,
-                }
-                set_result_and_schedule(source_task, (result, cpool_index, 0), scheduler);
-            } else {
-                set_result_and_schedule(
+            let result = || -> Result<(u64, u64), CapabilityErrors> {
+                cpool.cpool_create_mut(|cpool| {
+                    let untyped_op = cpool.lookup(untyped_memory);
+                    if let Some(untyped_cap) = untyped_op {
+                        untyped_cap.untyped_memory_create_mut(|untyped| {
+                            let raw_page_cap =
+                                StoredCap::base_page_retype_from::<[u8; 0x1000]>(untyped, cpool)?;
+                            Ok((raw_page_cap.1 as u64, 0u64))
+                        })
+                    } else {
+                        Err(CapabilityErrors::CapabilityMismatch)
+                    }
+                })
+            };
+
+            match result() {
+                std::result::Result::Ok(r) => set_result_and_schedule(
                     source_task,
-                    (CapabilityErrors::CapabilityMismatch, 0, 0),
+                    (CapabilityErrors::None, r.0, r.1),
                     scheduler,
-                );
+                ),
+                std::result::Result::Err(e) => {
+                    set_result_and_schedule(source_task, (e, 0, 0), scheduler)
+                }
             }
+            return;
         }
         SystemCall::RawPageMap {
             untyped_memory,
@@ -76,26 +99,24 @@ pub fn process_syscall(source_task: &TaskCap, syscall: Option<SystemCall>, sched
             raw_page,
         } => {
             let func = move || -> Result<(), CapabilityErrors> {
-                let raw_page: RawPageCap = cpool
-                    .lookup_upgrade(raw_page)
-                    .ok_or(CapabilityErrors::CapabilityMismatch)?;
-                let mut top_level_table: TopPageTableCap = cpool
-                    .lookup_upgrade(top_level_table)
-                    .ok_or(CapabilityErrors::CapabilityMismatch)?;
-                let vaddr: VAddr = vaddr.into();
-                vaddr.validate_user_mode()?;
-                let untyped_memory: UntypedCap = cpool
-                    .lookup_upgrade(untyped_memory)
-                    .ok_or(CapabilityErrors::CapabilityMismatch)?;
-                let perms = MapPermissions::READ | MapPermissions::WRITE | MapPermissions::EXECUTE;
-                top_level_table.map(
-                    vaddr,
-                    &raw_page,
-                    &mut untyped_memory.write(),
-                    &mut cpool.write(),
-                    perms,
-                )?;
-                Ok(())
+                cpool.cpool_create_mut(|cpool| {
+                    let raw_page = cpool
+                        .lookup(raw_page)
+                        .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
+                    let top_level_table = cpool
+                        .lookup(top_level_table)
+                        .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
+
+                    let vaddr: VAddr = vaddr.into();
+                    vaddr.validate_user_mode()?;
+                    let untyped_op = cpool
+                        .lookup(untyped_memory)
+                        .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
+                    untyped_op.untyped_memory_create_mut(|untyped| {
+                        let perms = MapPermissions::WRITE | MapPermissions::EXECUTE;
+                        top_level_table.l4_map(vaddr, &raw_page, untyped, cpool, perms)
+                    })
+                })
             };
             let data = func().err().unwrap_or(CapabilityErrors::None);
             set_result_and_schedule(source_task, (data, 0, 0), scheduler);
@@ -111,35 +132,55 @@ pub fn process_syscall(source_task: &TaskCap, syscall: Option<SystemCall>, sched
 }
 
 fn set_result_and_schedule(
-    task: &TaskCap,
+    task: &StoredCap,
     result: (CapabilityErrors, u64, u64),
     scheduler: &Scheduler,
 ) {
-    task.write().set_status(TaskStatus::SyscalledReadyToResume(
-        result.0, result.1, result.2,
-    ));
+    task.task_create_mut(|task_write| {
+        task_write
+            .descriptor
+            .get_or_insert_with(|| unreachable!())
+            .set_status(TaskStatus::SyscalledReadyToResume(
+                result.0, result.1, result.2,
+            ));
+        Ok(())
+    })
+    .unwrap();
     scheduler.add_task_with_priority(task.clone());
 }
 
 #[allow(dead_code)]
 fn set_result_with_data_and_schedule<T>(
-    task: &TaskCap,
+    task: &StoredCap,
     mut result: (CapabilityErrors, u64, u64),
     data: T,
     scheduler: &Scheduler,
 ) {
-    let buffer = task.write().upgrade_buffer();
-    if let Some(buf) = buffer {
-        buf.write()
-            .write()
-            .write_to_task_buffer(&data)
-            .expect("Set result memory exceeded");
-    } else {
-        result = (CapabilityErrors::TaskBufferNotFound, 0, 0);
-    }
+    task.task_create_mut(|task_write| {
+        let buffer = task_write
+            .descriptor
+            .get_or_insert_with(|| unreachable!())
+            .task_buffer();
+        if let Some(buf) = buffer {
+            buf.base_page_create_mut(|b| {
+                let buf = b.page_data_mut::<TaskBuffer>();
+                buf.write_to_task_buffer(&data)
+                    .expect("Set result memory exceeded");
+                Ok(())
+            })
+            .unwrap();
+        } else {
+            result = (CapabilityErrors::TaskBufferNotFound, 0, 0);
+        }
 
-    task.write().set_status(TaskStatus::SyscalledReadyToResume(
-        result.0, result.1, result.2,
-    ));
+        task_write
+            .descriptor
+            .get_or_insert_with(|| unreachable!())
+            .set_status(TaskStatus::SyscalledReadyToResume(
+                result.0, result.1, result.2,
+            ));
+        Ok(())
+    })
+    .unwrap();
     scheduler.add_task_with_priority(task.clone());
 }

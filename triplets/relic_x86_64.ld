@@ -52,6 +52,7 @@ SECTIONS
     } :boot :tls
 
     /*TBSS has no size. So, we force it to have size here.*/
+    __tbss_align = ALIGNOF(.tbss);
     . += SIZEOF(.tbss);
     __tbss_end = .;
 

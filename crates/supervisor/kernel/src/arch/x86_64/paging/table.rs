@@ -143,8 +143,6 @@ bitflags! {
         /// Global; if HUGE_PAGE && CR4.PGE = 1, determines whether the translation is global; ignored otherwise
         /// if not HUGE_PAGE this is ignored.
         const GLOBAL       = bit!(8);
-        /// Indirectly determines the memory type used to access the 1-GByte page referenced by this entry.
-        const PDPT_PAT     = bit!(12);
         /// If IA32_EFER.NXE = 1, execute-disable
         /// If 1, instruction fetches are not allowed from the 512-GByte region.
         const EXECUTE_DISABLE      = bit!(63);
@@ -192,7 +190,7 @@ impl PDPTEntry {
         ACCESSED
     );
     check_flag!(doc = "Indirectly determines the memory type used to access the 1-GByte page referenced by this entry. if not HUGE_PAGE this is ignored.",
-                is_pat, PDPT_PAT);
+                is_pat, HUGE_PAGE);
     check_flag!(doc = "If IA32_EFER.NXE = 1, execute-disable. If 1, instruction fetches are not allowed from the 512-GByte region.",
                 is_instruction_fetching_disabled, EXECUTE_DISABLE);
 }
@@ -221,9 +219,6 @@ bitflags! {
         /// Global; if LARGE_PAGE && CR4.PGE = 1, determines whether the translation is global; ignored otherwise
         /// if not LARGE_PAGE this is ignored.
         const GLOBAL       = bit!(8);
-        /// Indirectly determines the memory type used to access the 2-MByte page referenced by this entry.
-        /// if not LARGE_PAGE this is ignored.
-        const PD_PAT     = bit!(12);
         /// If IA32_EFER.NXE = 1, execute-disable
         /// If 1, instruction fetches are not allowed from the 512-GByte region.
         const EXECUTE_DISABLE      = bit!(63);
@@ -277,7 +272,7 @@ impl PDEntry {
     check_flag!(doc = "Global; if LARGE_PAGE && CR4.PGE = 1, determines whether the translation is global; ignored otherwise if not LARGE_PAGE this is ignored.",
                 is_global, GLOBAL);
     check_flag!(doc = "Indirectly determines the memory type used to access the 2-MByte page referenced by this entry. if not LARGE_PAGE this is ignored.",
-                is_pat, PD_PAT);
+                is_pat, LARGE_PAGE);
     check_flag!(doc = "If IA32_EFER.NXE = 1, execute-disable. If 1, instruction fetches are not allowed from the 2-Mbyte region.",
                 is_instruction_fetching_disabled, EXECUTE_DISABLE);
 }

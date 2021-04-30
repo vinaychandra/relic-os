@@ -85,6 +85,7 @@ impl VAddr {
             let value: u64 = addr.into();
             VAddr::new(value + globals::MEM_MAP_OFFSET_LOCATION)
         };
+        let vaddr_u64: u64 = self.into();
 
         unsafe {
             let l3_entry = l4[pml4_index(self)];
@@ -99,6 +100,11 @@ impl VAddr {
                 None?
             }
             let l2_paddr = l2_entry.get_address();
+            if l2_entry.is_pat() {
+                // Huge page
+                let l2_paddr_u64: u64 = l2_paddr.into();
+                return Some((l2_paddr_u64 | (vaddr_u64 & 0x3FFF_FFFF)).into());
+            }
             let l2_vaddr = addr_mapping(l2_paddr);
             let l2: &PD = l2_vaddr.as_mut_ptr();
             let l1_entry = l2[pd_index(self)];
@@ -106,6 +112,11 @@ impl VAddr {
                 None?
             }
             let l1_paddr = l1_entry.get_address();
+            if l1_entry.is_pat() {
+                // Large page
+                let l1_paddr_u64: u64 = l1_paddr.into();
+                return Some((l1_paddr_u64 | (vaddr_u64 & 0x1F_FFFF)).into());
+            }
             let l1_vaddr = addr_mapping(l1_paddr);
             let l1: &PT = l1_vaddr.as_mut_ptr();
             let l0_entry = l1[pt_index(self)];
@@ -113,11 +124,9 @@ impl VAddr {
                 None?
             }
             let l0_paddr = l0_entry.get_address();
-
-            let vaddr_u64: u64 = self.into();
             let page_paddr_u64: u64 = l0_paddr.into();
 
-            Some((page_paddr_u64 | (vaddr_u64 & 0b111111111111)).into())
+            Some((page_paddr_u64 | (vaddr_u64 & 0xFFF)).into())
         }
     }
 }

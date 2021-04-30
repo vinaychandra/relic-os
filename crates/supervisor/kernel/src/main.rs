@@ -13,28 +13,28 @@
 #![feature(dispatch_from_dyn)]
 #![feature(maybe_uninit_extra)]
 #![feature(naked_functions)]
+#![feature(option_get_or_insert_default)]
 #![feature(thread_local)]
 #![feature(trace_macros)]
 #![feature(type_ascription)]
 #![feature(unsize)]
 
 use crate::{
-    addr::VAddr,
-    arch::{
-        capability::TopPageTableCap,
-        globals::{self, BASE_PAGE_LENGTH},
+    addr::{PAddrGlobal, VAddr},
+    arch::globals::{self, BASE_PAGE_LENGTH},
+    capability::{
+        Capability, CapabilityEnum, Cpool, CpoolInner, MapPermissions, Scheduler, StoredCap,
+        UntypedMemory,
     },
-    capability::{CPoolCap, MapPermissions, Scheduler, TaskBufferPageCap, TaskCap, UntypedCap},
     logging::UnifiedLogger,
     ramdisk::{elf_loader::DefaultElfLoader, ustar::UStarArchive},
     relic_utils::align,
-    util::memory_region::MemoryRegion,
+    util::{boxed::Boxed, memory_region::MemoryRegion},
 };
 use elfloader::ElfBinary;
 use heapless::Vec;
-use relic_abi::bootstrap::BootstrapInfo;
-use spin::Mutex;
-use std::panic::PanicInfo;
+use relic_abi::{bootstrap::BootstrapInfo, syscall::TaskBuffer};
+use std::{cell::RefCell, panic::PanicInfo};
 
 extern crate alloc;
 extern crate core as std;
@@ -62,7 +62,6 @@ extern crate static_assertions;
 
 pub mod arch;
 pub mod logging;
-pub mod update;
 
 /// Support for loading of Sigma process.
 pub mod ramdisk;
@@ -102,6 +101,7 @@ fn _start() -> ! {
 /// This function is called on panic.
 #[cfg_attr(target_os = "none", panic_handler)]
 fn _panic_handler(info: &PanicInfo) -> ! {
+    info!("====== KERNEL_PANIC ======");
     error!("Panic: {}", info);
     info!("====== KERNEL_PANIC ======");
     loop {}
@@ -112,69 +112,77 @@ fn _alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
     panic!("allocation error: {:?}", layout)
 }
 
-// Root untyped memory regions
-static ROOT_MEM_REGIONS: Mutex<heapless::Vec<UntypedCap, heapless::consts::U32>> =
-    Mutex::new(heapless::Vec(heapless::i::Vec::new()));
-
 /// Main Function on bootstrap processor.
 /// This function should not return.
 pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
     info!(target: "main", "Free regions found: {:?}", free_regions);
 
     let mut bootstrap_info = BootstrapInfo {
-        cpool_capability: 0.into(),
         top_level_pml4: 0.into(),
-        free_mem_regions: (1.into(), 0.into()),
+        free_mem_regions: (0.into(), 0.into()),
     };
-    let (mut cpool_cap, mut untyped_cap) = {
-        let mut root_regions = ROOT_MEM_REGIONS.lock();
-        let mut region_iter = free_regions.iter();
-        let cpool_target_region = region_iter.next().unwrap();
+    const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
+    let root_cpool_inner = CpoolInner {
+        unsafe_data: [NONE_INNER; 256],
+    };
+    let mut root_cpool = Cpool {
+        linked_task: None,
+        data: unsafe {
+            Boxed::new(PAddrGlobal::new(
+                &root_cpool_inner as *const CpoolInner as u64,
+            ))
+        },
+    };
 
-        let untyped = unsafe {
-            UntypedCap::bootstrap(
-                cpool_target_region.start_paddr().to_paddr_global(),
-                cpool_target_region.length(),
-            )
-        };
-        root_regions.push(untyped.clone()).unwrap();
-        let cpool = CPoolCap::retype_from(&mut untyped.write()).unwrap();
-
-        cpool.read().downgrade_at(cpool.clone(), 0).unwrap();
-        cpool.read().downgrade_free(untyped.clone()).unwrap();
-
-        let mut untyped_target = untyped;
-
-        for region in region_iter {
-            let untyped = unsafe {
-                UntypedCap::bootstrap(region.start_paddr().to_paddr_global(), region.length())
-            };
-            root_regions.push(untyped.clone()).unwrap();
-            cpool.read().downgrade_free(untyped.clone()).unwrap();
-
-            if untyped.read().length() > untyped_target.read().length() {
-                untyped_target = untyped;
-            }
+    let mut largest_index = usize::MAX;
+    let mut largest_size = 0;
+    for (index, region) in free_regions.iter().enumerate() {
+        if region.length() > largest_size {
+            largest_size = region.length();
+            largest_index = index;
         }
+        let untyped = unsafe {
+            UntypedMemory::bootstrap(region.start_paddr().to_paddr_global(), region.length())
+        };
+        root_cpool
+            .write_to_if_empty(index, untyped)
+            .expect("Failed to create initial memory mappings.");
+    }
+    bootstrap_info.free_mem_regions.1 = (free_regions.len() as u8 - 1).into();
 
-        bootstrap_info.free_mem_regions.1 = (root_regions.len() as u8).into();
-        (cpool, untyped_target)
+    let cpool_cap = Capability {
+        capability_data: CapabilityEnum::Cpool(root_cpool),
+        ..Default::default()
     };
 
-    info!(target: "main", "CPool: {:?}", cpool_cap);
-    info!(target: "main", "Untyped: {:?}", untyped_cap);
+    let root_cpool_refcell = RefCell::new(cpool_cap);
+    let root_cpool_stored: StoredCap = (&root_cpool_refcell).into();
 
-    let (task_cap, _) = load_sigma(&mut cpool_cap, &mut untyped_cap, bootstrap_info);
+    let (task_cap, _pml4) = root_cpool_stored
+        .cpool_create_mut(|mut root_cpool| {
+            let untyped = root_cpool.lookup((largest_index as u8).into()).unwrap();
+
+            Ok(load_sigma(
+                root_cpool_stored.clone(),
+                &mut root_cpool,
+                untyped,
+                bootstrap_info,
+            ))
+        })
+        .unwrap();
+
     let scheduler = Scheduler::new();
     scheduler.add_task_with_priority(task_cap);
     scheduler.run_forever()
 }
 
+// Return task, pml4
 fn load_sigma(
-    cpool_cap: &mut CPoolCap,
-    untyped_cap: &mut UntypedCap,
+    cpool_stored: StoredCap,
+    cpool_cap: &mut Cpool,
+    untyped_cap: StoredCap,
     mut bootstrap_info: BootstrapInfo,
-) -> (TaskCap, TopPageTableCap) {
+) -> (StoredCap, StoredCap) {
     let ramdisk: UStarArchive;
     let binary = {
         unsafe {
@@ -189,23 +197,37 @@ fn load_sigma(
             binary
         }
     };
-    let mut loader =
-        DefaultElfLoader::new(VAddr::new(0), cpool_cap, &mut bootstrap_info, untyped_cap);
+    let mut loader = DefaultElfLoader::new(
+        VAddr::new(0),
+        cpool_cap,
+        &mut bootstrap_info,
+        untyped_cap.clone(),
+    );
     binary.load(&mut loader).expect("Binary loading failed");
     let loc: u64 = loader.exe_section_location().into();
-    info!(target: "load_sigma", 
-            "Sigma project loaded. Use comand `add-symbol-file ../../x86_64-relic-user/debug/relic-sigma  0x{:x}`", 
+    info!(target: "load_sigma",
+            "Sigma project loaded. Use comand `add-symbol-file ../../x86_64-relic-user/debug/relic-sigma  0x{:x}`",
             loc);
+    let pml4 = loader.pml4().clone();
+    core::mem::drop(loader);
 
     info!(target: "load_sigma", "Loading kernel stack");
     let user_stack_start: u64 = 0x6FFF_000_0000;
     let num_pages = 10usize;
-    for page_index in 0..num_pages {
-        loader.map_empty_page(
-            VAddr::new(user_stack_start + (BASE_PAGE_LENGTH * page_index) as u64),
-            MapPermissions::READ | MapPermissions::WRITE,
-        )
-    }
+    untyped_cap
+        .untyped_memory_create_mut(|untyped| {
+            for page_index in 0..num_pages {
+                DefaultElfLoader::map_empty_page(
+                    &pml4,
+                    untyped,
+                    cpool_cap,
+                    VAddr::new(user_stack_start + (BASE_PAGE_LENGTH * page_index) as u64),
+                    MapPermissions::WRITE,
+                )
+            }
+            Ok(())
+        })
+        .unwrap();
     let user_stack_end: VAddr = align::align_down(
         user_stack_start + num_pages as u64 * BASE_PAGE_LENGTH as u64 - 1,
         globals::STACK_ALIGN as u64,
@@ -215,39 +237,62 @@ fn load_sigma(
 
     info!(target: "load_sigma", "Loading TaskBuffers");
     let buffer_start: u64 = 0x6000_000_0000;
-    let buffer_cap = TaskBufferPageCap::retype_from(&mut *loader.untyped_mut().write()).unwrap();
-    let val = loader.cpool().read().downgrade_free(buffer_cap.clone());
-    if let Ok(ind) = val {
-        info!(target: "load_sigma", "TaskBufferCap is stored at index {}", ind);
-    }
-    loader
-        .map_cap(
-            &buffer_cap,
-            buffer_start.into(),
-            MapPermissions::READ | MapPermissions::WRITE,
-        )
+    let (buffer_cap, ind) = untyped_cap
+        .untyped_memory_create_mut(|untyped| {
+            StoredCap::base_page_retype_from::<TaskBuffer>(untyped, cpool_cap)
+        })
         .unwrap();
-    buffer_cap.write().write().self_address = buffer_start;
-    // Load bootstrap info into payload
+    info!(target: "load_sigma", "TaskBufferCap is stored at index {}", ind);
+    untyped_cap
+        .untyped_memory_create_mut(|untyped| {
+            pml4.l4_map(
+                buffer_start.into(),
+                &buffer_cap,
+                untyped,
+                cpool_cap,
+                MapPermissions::WRITE,
+            )
+        })
+        .unwrap();
+
     buffer_cap
-        .write()
-        .write()
-        .write_to_task_buffer(&bootstrap_info)
+        .base_page_create_mut(|buffer| {
+            buffer.page_data_mut::<TaskBuffer>().self_address = buffer_start;
+
+            // Load bootstrap info into payload
+            buffer
+                .page_data_mut::<TaskBuffer>()
+                .write_to_task_buffer(&bootstrap_info)
+                .unwrap();
+
+            Ok(())
+        })
         .unwrap();
 
-    let task_cap = TaskCap::retype_from(&mut *loader.untyped_mut().write(), 15).unwrap();
-    {
-        let mut task_cap_write = task_cap.write();
-        task_cap_write.set_instruction_pointer(binary.entry_point().into());
-        task_cap_write.set_stack_pointer(user_stack_end);
-        task_cap_write.set_status(capability::TaskStatus::Inactive);
-        task_cap_write.downgrade_cpool((*loader.cpool()).clone());
-        task_cap_write.downgrade_top_page_table(loader.pml4().clone());
-        task_cap_write.downgrade_buffer(buffer_cap.clone());
+    let (task_cap, _task_cap_index) = untyped_cap
+        .untyped_memory_create_mut(|untyped| StoredCap::task_retype_from(untyped, cpool_cap, 15))
+        .unwrap();
 
-        task_cap_write.set_tcb_location(buffer_start.into());
-    }
+    task_cap
+        .task_create_mut(|task_cap_write_main| {
+            let task_cap_write = task_cap_write_main
+                .descriptor
+                .get_or_insert_with(|| unreachable!());
+
+            task_cap_write.set_instruction_pointer(binary.entry_point().into());
+            task_cap_write.set_stack_pointer(user_stack_end);
+            task_cap_write.set_status(capability::TaskStatus::Inactive);
+
+            task_cap_write.set_tcb_location(buffer_start.into());
+            Ok(())
+        })
+        .unwrap();
+    task_cap
+        .task_set_cpool(cpool_stored, Some(cpool_cap))
+        .unwrap();
+    task_cap.task_set_top_level_table(pml4.clone()).unwrap();
+    task_cap.task_set_task_buffer(buffer_cap).unwrap();
 
     info!(target: "load_sigma", "Sigma task Cap: {:?}", task_cap);
-    (task_cap, loader.unwrap())
+    (task_cap, pml4)
 }

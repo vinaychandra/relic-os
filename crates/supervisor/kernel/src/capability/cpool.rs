@@ -1,228 +1,158 @@
-use std::{any::Any, ops::Deref};
-
+use crate::util::boxed::Boxed;
 use relic_abi::{cap::CapabilityErrors, prelude::CAddr};
-use spin::RwLock;
 
-use crate::{
-    capability::UntypedDescriptor,
-    util::managed_arc::{ManagedArc, ManagedArcAny, ManagedWeakPool256Arc},
-};
+use super::*;
 
-/// Capability pool descriptor.
 #[derive(Debug)]
-pub struct CPoolDescriptor {
-    weak_pool: ManagedWeakPool256Arc,
-    #[allow(dead_code)]
-    next: Option<ManagedArcAny>,
+pub struct Cpool {
+    pub data: Boxed<CpoolInner>,
+    pub linked_task: Option<StoredCap>,
 }
 
-/// Capability pool capability. Reference-counted smart pointer to
-/// capability pool descriptor. Capability pool itself is a
-/// `ManagedWeakPool` with 256 entries.
-///
-/// Capability pool capability is used to hold multiple capabilities
-/// together so as to be addressable in user-space programs.
-pub type CPoolCap = ManagedArc<RwLock<CPoolDescriptor>>;
+#[derive(Debug)]
+pub struct CpoolInner {
+    pub unsafe_data: [RefCell<Capability>; 256],
+}
 
-impl CPoolDescriptor {
-    /// Create a new pointer to a capability descriptor using the
-    /// index. If nothing is in the entry, `None` is returned.
-    pub fn upgrade_any(&self, index: usize) -> Option<ManagedArcAny> {
-        self.weak_pool.upgrade_any(index)
-    }
-
-    /// Like `upgrade_any`, but returns a value with the specified
-    /// type.
-    pub fn upgrade<T: Any + core::fmt::Debug>(&self, index: usize) -> Option<ManagedArc<T>> {
-        self.weak_pool.upgrade(index)
-    }
-
-    /// Downgrade a capability into the capability pool (weak pool) at
-    /// a specified index.
-    pub fn downgrade_at<T: Any + core::fmt::Debug>(
-        &self,
-        arc: ManagedArc<T>,
-        index: usize,
-    ) -> Result<(), CapabilityErrors> {
-        self.weak_pool
-            .downgrade_at(arc, index)
-            .map_err(|_| CapabilityErrors::CapabilityAlreadyOccupied)
-    }
-
-    /// Downgrade a capability into the capability pool (weak pool) at
-    /// a free index.
-    pub fn downgrade_free<T: Any + core::fmt::Debug>(
-        &self,
-        arc: ManagedArc<T>,
-    ) -> Result<usize, CapabilityErrors> {
-        self.weak_pool
-            .downgrade_free(arc)
-            .ok_or(CapabilityErrors::CapabilitySlotsFull)
-    }
-
-    /// Downgrade a `ManagedArcAny` into the capability pool (weak
-    /// pool) at a specified index.
-    pub fn downgrade_any_at(
-        &self,
-        arc: ManagedArcAny,
-        index: usize,
-    ) -> Result<(), CapabilityErrors> {
-        self.weak_pool
-            .downgrade_at(arc, index)
-            .map_err(|_| CapabilityErrors::CapabilityAlreadyOccupied)
-    }
-
-    /// Downgrade a `ManagedArcAny` into the capability pool (weak
-    /// pool) at a free index.
-    pub fn downgrade_any_free(&self, arc: ManagedArcAny) -> Result<usize, CapabilityErrors> {
-        self.weak_pool
-            .downgrade_free(arc)
-            .ok_or(CapabilityErrors::CapabilityAlreadyOccupied)
-    }
-
+impl Cpool {
     /// Size of the capability pool.
     pub fn size(&self) -> usize {
-        256
+        self.data.unsafe_data.len()
     }
 
-    /// Number of capabilities stored currently in the pool. (Conveservative)
-    pub fn capability_count(&self) -> usize {
-        self.weak_pool.capability_count()
-    }
-}
+    pub fn get_free_index(&self) -> Result<usize, CapabilityErrors> {
+        for val in self.data.unsafe_data.iter().enumerate() {
+            let tryborrow = &val.1.try_borrow();
+            if let Ok(borrow) = tryborrow {
+                if let CapabilityEnum::EmptyCap { .. } = borrow.capability_data {
+                    return Ok(val.0);
+                }
+            }
+        }
 
-impl CPoolCap {
-    /// Create a capability pool capability from an untyped
-    /// capability.
-    pub fn retype_from(untyped: &mut UntypedDescriptor) -> Result<Self, CapabilityErrors> {
-        let mut arc: Option<Self> = None;
-
-        let weak_pool = unsafe {
-            ManagedWeakPool256Arc::create(untyped.allocate(
-                ManagedWeakPool256Arc::inner_type_length(),
-                ManagedWeakPool256Arc::inner_type_alignment(),
-            )?)
-        };
-
-        unsafe {
-            untyped.derive(
-                Self::inner_type_length(),
-                Self::inner_type_alignment(),
-                |paddr, next_child| {
-                    arc = Some(Self::new(
-                        paddr,
-                        RwLock::new(CPoolDescriptor {
-                            weak_pool,
-                            next: next_child,
-                        }),
-                    ));
-
-                    arc.clone().unwrap()
-                },
-            )?
-        };
-
-        Ok(arc.unwrap())
+        Err(CapabilityErrors::CapabilitySlotsFull)
     }
 
-    fn lookup<R, F: FnOnce(Option<(&CPoolDescriptor, usize)>) -> R>(
-        &self,
-        caddr: CAddr,
-        f: F,
-    ) -> R {
+    pub fn lookup(&self, caddr: CAddr) -> Option<StoredCap> {
         if caddr.1 == 0 {
-            f(None)
+            None
         } else if caddr.1 == 1 {
-            let cur_lookup_index = caddr.0[0];
-            f(Some((self.read().deref(), cur_lookup_index as usize)))
+            let index = caddr.0[0];
+            Some(unsafe { UnsafeRef::from_raw(&self.data.unsafe_data[index as usize]) })
         } else {
             let cur_lookup_index = caddr.0[0];
-            let next_lookup_cpool: Option<CPoolCap> =
-                self.read().upgrade(cur_lookup_index as usize);
-            let next_caddr = caddr << 1;
-
-            if next_lookup_cpool.is_some() {
-                let next_lookup_cpool = next_lookup_cpool.unwrap();
-                next_lookup_cpool.lookup::<R, F>(next_caddr, f)
+            let next_lookup_cpool = &self.data.unsafe_data[cur_lookup_index as usize];
+            if let CapabilityEnum::Cpool(pool) = &next_lookup_cpool.borrow().capability_data {
+                let next_caddr = caddr << 1;
+                pool.lookup(next_caddr)
             } else {
-                f(None)
+                None
             }
         }
     }
 
-    /// Lookup upgrading a capability from a capability address to a `ManagedArcAny`.
-    pub fn lookup_upgrade_any(&self, caddr: CAddr) -> Option<ManagedArcAny> {
-        self.lookup(caddr, |data| {
-            data.map_or(None, |(cpool, index)| cpool.upgrade_any(index))
-        })
-    }
-
-    /// Lookup upgrading a capability from a capability address.
-    pub fn lookup_upgrade<T: Any + core::fmt::Debug>(&self, caddr: CAddr) -> Option<ManagedArc<T>> {
-        self.lookup(caddr, |data| {
-            data.map_or(None, |(cpool, index)| cpool.upgrade(index))
-        })
-    }
-
-    /// Downgrade a capability into the capability pool at a specified capability address.
-    pub fn lookup_downgrade_at<T: Any + core::fmt::Debug>(
+    pub fn search_fn<F: FnMut(StoredCap) -> bool>(
         &self,
-        arc: ManagedArc<T>,
-        caddr: CAddr,
-    ) -> Result<(), CapabilityErrors>
-    where
-        ManagedArc<T>: Any,
-    {
-        self.lookup(caddr, |data| {
-            let (cpool, index) = data.unwrap();
-            cpool.downgrade_at(arc, index)
-        })
+        mut search_fn: F,
+    ) -> Result<StoredCap, CapabilityErrors> {
+        self.search_fn_with_depth(&mut search_fn, 0)
     }
 
-    /// Downgrade a `ManagedArcAny` into the capability pool at a specified capability address.
-    pub fn lookup_downgrade_any_at<T: Any>(
+    fn search_fn_with_depth<F: FnMut(StoredCap) -> bool>(
         &self,
-        arc: ManagedArcAny,
-        caddr: CAddr,
-    ) -> Result<(), CapabilityErrors> {
-        self.lookup(caddr, |data| {
-            let (cpool, index) = data.unwrap();
-            cpool.downgrade_any_at(arc, index)
-        })
+        search_fn: &mut F,
+        depth: u8,
+    ) -> Result<StoredCap, CapabilityErrors> {
+        if depth > 5 {
+            return Err(CapabilityErrors::CapabilitySearchFailed);
+        }
+
+        let mut partial_search = false;
+        self.data
+            .unsafe_data
+            .iter()
+            .find_map(|val| {
+                let cap: StoredCap = val.into();
+
+                if cap.as_ref().try_borrow().is_err() {
+                    partial_search = true;
+                    return None;
+                }
+
+                let cpool_search =
+                    cap.cpool_create(|cpool| cpool.search_fn_with_depth(search_fn, depth + 1));
+                if cpool_search.is_ok() {
+                    return cpool_search.ok();
+                }
+
+                let user_search = search_fn(cap.clone());
+                if user_search {
+                    return Some(cap);
+                }
+
+                None
+            })
+            .ok_or(if partial_search {
+                CapabilityErrors::CapabilitySearchFailedPartial
+            } else {
+                CapabilityErrors::CapabilitySearchFailed
+            })
+    }
+
+    pub fn write_to_if_empty(
+        &mut self,
+        index: usize,
+        cap: Capability,
+    ) -> Result<StoredCap, CapabilityErrors> {
+        let data_at_index = &mut self.data.unsafe_data[index];
+        if let CapabilityEnum::EmptyCap = &data_at_index.get_mut().capability_data {
+            *data_at_index = RefCell::new(cap);
+            Ok(unsafe { UnsafeRef::from_raw(data_at_index) })
+        } else {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::mem::MaybeUninit;
+impl StoredCap {
+    pub fn cpool_retype_from(
+        untyped_memory: &mut UntypedMemory,
+        cpool_to_store_in: &mut Cpool,
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
+        const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
 
-    use crate::{addr::PAddrGlobal, capability::UntypedCap};
+        let new = CpoolInner {
+            unsafe_data: [NONE_INNER; 256],
+        };
 
-    use super::*;
+        let mut result_index = 0;
 
-    #[test]
-    fn test_untyped_memory() {
-        let underlying_value: Box<MaybeUninit<[u64; 40960]>> = Box::new(MaybeUninit::uninit());
-        let box_addr = Box::into_raw(underlying_value) as u64;
-        let addr = PAddrGlobal::new(box_addr);
+        let location = untyped_memory.derive(
+            Some(core::mem::align_of::<CpoolInner>()),
+            |memory: *mut CpoolInner| {
+                unsafe {
+                    core::ptr::write(memory, new);
+                }
+                let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
-        let untyped_memory = unsafe { UntypedCap::bootstrap(addr, 40960) };
-        let um2 = untyped_memory.clone();
+                let cpool_location_to_store = cpool_to_store_in.get_free_index()?;
 
-        let mut write_guard = untyped_memory.write();
-        let cpool = CPoolCap::retype_from(&mut write_guard).expect("CPool cannot be created");
+                let location = cpool_to_store_in.write_to_if_empty(
+                    cpool_location_to_store,
+                    Capability {
+                        capability_data: CapabilityEnum::Cpool(Cpool {
+                            data: boxed,
+                            linked_task: None,
+                        }),
+                        ..Default::default()
+                    },
+                )?;
 
-        cpool
-            .read()
-            .downgrade_any_at(um2, 0)
-            .expect("Downgrade failed");
+                result_index = cpool_location_to_store;
+                Ok(location)
+            },
+        )?;
 
-        assert_eq!(1, untyped_memory.strong_count());
-
-        {
-            let upgraded: Option<ManagedArc<RwLock<UntypedDescriptor>>> = cpool.read().upgrade(0);
-            assert!(upgraded.is_some());
-            assert_eq!(2, untyped_memory.strong_count());
-        }
+        Ok((location, result_index))
     }
 }

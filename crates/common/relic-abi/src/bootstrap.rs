@@ -4,9 +4,6 @@ use crate::prelude::CAddr;
 /// data needed for the sigma process.
 #[repr(C)]
 pub struct BootstrapInfo {
-    /// Address of the capability pool for this task.
-    pub cpool_capability: CAddr,
-
     /// List of free memory regions.
     /// [StartCaddr, EndCAddr]
     pub free_mem_regions: (CAddr, CAddr),
