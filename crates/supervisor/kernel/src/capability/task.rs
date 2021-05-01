@@ -1,4 +1,5 @@
-use std::{cell::RefCell, sync::atomic::AtomicU64};
+use core::ops::Deref;
+use std::{cell::RefCell, ops::DerefMut, sync::atomic::AtomicU64};
 
 use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
 
@@ -35,9 +36,23 @@ impl Default for TaskStatus {
 
 #[derive(Debug)]
 pub struct Task {
-    pub descriptor: Option<Boxed<TaskDescriptor>>,
+    descriptor: Boxed<TaskDescriptor>,
     pub next_task_item: Option<StoredCap>,
     pub prev_task_item: Option<StoredCap>,
+}
+
+impl Deref for Task {
+    type Target = TaskDescriptor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.descriptor
+    }
+}
+
+impl DerefMut for Task {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.descriptor
+    }
 }
 
 #[derive(Debug, Getters, Setters)]
@@ -95,7 +110,7 @@ impl StoredCap {
                 cpool_location_to_store,
                 Capability {
                     capability_data: CapabilityEnum::Task(Task {
-                        descriptor: Some(boxed),
+                        descriptor: boxed,
                         next_task_item: None,
                         prev_task_item: None,
                     }),
@@ -115,9 +130,7 @@ impl StoredCap {
         cap: StoredCap,
         cpool: Option<&mut Cpool>, // Option `cap`
     ) -> Result<(), CapabilityErrors> {
-        self.task_create_mut(|task| {
-            let desc = task.descriptor.get_or_insert_with(|| unreachable!());
-
+        self.task_create_mut(|desc| {
             if desc.cpool.is_some() {
                 Err(CapabilityErrors::CapabilityAlreadyOccupied)?
             }
@@ -143,9 +156,7 @@ impl StoredCap {
     }
 
     pub fn task_set_top_level_table(&self, cap: StoredCap) -> Result<(), CapabilityErrors> {
-        self.task_create_mut(|task| {
-            let desc = task.descriptor.get_or_insert_with(|| unreachable!());
-
+        self.task_create_mut(|desc| {
             if desc.top_level_table.is_some() {
                 Err(CapabilityErrors::CapabilityAlreadyOccupied)?
             }
@@ -165,9 +176,7 @@ impl StoredCap {
     }
 
     pub fn task_set_task_buffer(&self, cap: StoredCap) -> Result<(), CapabilityErrors> {
-        self.task_create_mut(|task| {
-            let desc = task.descriptor.get_or_insert_with(|| unreachable!());
-
+        self.task_create_mut(|desc| {
             if desc.task_buffer.is_some() {
                 Err(CapabilityErrors::CapabilityAlreadyOccupied)?
             }
@@ -246,7 +255,7 @@ impl Scheduler {
     pub const fn new() -> Self {
         const REFCELL_MARKER_TASK: RefCell<Capability> = RefCell::new(Capability {
             capability_data: CapabilityEnum::Task(Task {
-                descriptor: None,
+                descriptor: unsafe { Boxed::new_unchecked(0xFFFF_FFFF_DEAD_DEAD) },
                 next_task_item: None,
                 prev_task_item: None,
             }),
@@ -261,10 +270,7 @@ impl Scheduler {
     /// Add a task with the given priority.
     pub fn add_task_with_priority(&self, cap: StoredCap) {
         cap.task_create_mut(|new_task| {
-            let task_priority = new_task
-                .descriptor
-                .get_or_insert_with(|| unreachable!())
-                .priority as usize;
+            let task_priority = new_task.priority as usize;
             assert!(task_priority < 16);
 
             let current_list = &self.current_list[task_priority * 2 + 1];
@@ -339,8 +345,7 @@ impl Scheduler {
             let task = self.get_task_to_run();
             if let Some(task_cap) = task {
                 let result_status = task_cap
-                    .task_create_mut(|task_write| {
-                        let desc = task_write.descriptor.get_or_insert_with(|| unreachable!());
+                    .task_create_mut(|desc| {
                         let task_status = desc.status.clone();
 
                         let result_status = match task_status {
@@ -400,8 +405,8 @@ mod tests {
             task1
                 .0
                 .task_create_mut(|t| {
-                    assert!(t.descriptor.get_or_insert_with(|| unreachable!()).task_id == 1);
-                    t.descriptor.get_or_insert_with(|| unreachable!()).priority = 5;
+                    assert!(t.descriptor.task_id == 1);
+                    t.descriptor.priority = 5;
                     Ok(())
                 })
                 .unwrap();
@@ -409,8 +414,8 @@ mod tests {
             task2
                 .0
                 .task_create_mut(|t| {
-                    assert!(t.descriptor.get_or_insert_with(|| unreachable!()).task_id == 2);
-                    t.descriptor.get_or_insert_with(|| unreachable!()).priority = 5;
+                    assert!(t.descriptor.task_id == 2);
+                    t.descriptor.priority = 5;
                     Ok(())
                 })
                 .unwrap();
@@ -418,8 +423,8 @@ mod tests {
             task3
                 .0
                 .task_create_mut(|t| {
-                    assert!(t.descriptor.get_or_insert_with(|| unreachable!()).task_id == 3);
-                    t.descriptor.get_or_insert_with(|| unreachable!()).priority = 10;
+                    assert!(t.descriptor.task_id == 3);
+                    t.descriptor.priority = 10;
                     Ok(())
                 })
                 .unwrap();
@@ -434,10 +439,7 @@ mod tests {
                 3,
                 next_task
                     .unwrap()
-                    .task_create_mut(|t| Ok(t
-                        .descriptor
-                        .get_or_insert_with(|| unreachable!())
-                        .task_id))
+                    .task_create_mut(|t| Ok(t.descriptor.task_id))
                     .unwrap()
             );
 
@@ -445,10 +447,7 @@ mod tests {
             assert_eq!(
                 2,
                 next_task
-                    .task_create_mut(|t| Ok(t
-                        .descriptor
-                        .get_or_insert_with(|| unreachable!())
-                        .task_id))
+                    .task_create_mut(|t| Ok(t.descriptor.task_id))
                     .unwrap()
             );
             scheduler.add_task_with_priority(next_task);
@@ -457,10 +456,7 @@ mod tests {
             assert_eq!(
                 1,
                 next_task
-                    .task_create_mut(|t| Ok(t
-                        .descriptor
-                        .get_or_insert_with(|| unreachable!())
-                        .task_id))
+                    .task_create_mut(|t| Ok(t.descriptor.task_id))
                     .unwrap()
             );
             scheduler.add_task_with_priority(next_task);
@@ -469,10 +465,7 @@ mod tests {
             assert_eq!(
                 1,
                 next_task
-                    .task_create_mut(|t| Ok(t
-                        .descriptor
-                        .get_or_insert_with(|| unreachable!())
-                        .task_id))
+                    .task_create_mut(|t| Ok(t.descriptor.task_id))
                     .unwrap()
             );
         }

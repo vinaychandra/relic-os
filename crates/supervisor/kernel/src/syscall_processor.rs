@@ -23,13 +23,7 @@ pub fn process_syscall(
     }
 
     let cpool: StoredCap = source_task
-        .task_create_mut(|t| {
-            Ok(t.descriptor
-                .get_or_insert_with(|| unreachable!())
-                .cpool()
-                .clone()
-                .expect("CPool cannot be found"))
-        })
+        .task_create_mut(|t| Ok(t.cpool().clone().expect("CPool cannot be found")))
         .unwrap();
 
     let syscall = syscall.unwrap();
@@ -137,12 +131,9 @@ fn set_result_and_schedule(
     scheduler: &Scheduler,
 ) {
     task.task_create_mut(|task_write| {
-        task_write
-            .descriptor
-            .get_or_insert_with(|| unreachable!())
-            .set_status(TaskStatus::SyscalledReadyToResume(
-                result.0, result.1, result.2,
-            ));
+        task_write.set_status(TaskStatus::SyscalledReadyToResume(
+            result.0, result.1, result.2,
+        ));
         Ok(())
     })
     .unwrap();
@@ -157,10 +148,7 @@ fn set_result_with_data_and_schedule<T>(
     scheduler: &Scheduler,
 ) {
     task.task_create_mut(|task_write| {
-        let buffer = task_write
-            .descriptor
-            .get_or_insert_with(|| unreachable!())
-            .task_buffer();
+        let buffer = task_write.task_buffer();
         if let Some(buf) = buffer {
             buf.base_page_create_mut(|b| {
                 let buf = b.page_data_mut::<TaskBuffer>();
@@ -173,12 +161,9 @@ fn set_result_with_data_and_schedule<T>(
             result = (CapabilityErrors::TaskBufferNotFound, 0, 0);
         }
 
-        task_write
-            .descriptor
-            .get_or_insert_with(|| unreachable!())
-            .set_status(TaskStatus::SyscalledReadyToResume(
-                result.0, result.1, result.2,
-            ));
+        task_write.set_status(TaskStatus::SyscalledReadyToResume(
+            result.0, result.1, result.2,
+        ));
         Ok(())
     })
     .unwrap();

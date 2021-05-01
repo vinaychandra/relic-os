@@ -168,6 +168,13 @@ impl<T> Boxed<T> {
         Self { inner: ptr.into() }
     }
 
+    pub const unsafe fn new_unchecked(ptr_paddr: u64) -> Self {
+        // TODO: assert ptr is in correct range.
+        Self {
+            inner: NonNull::new_unchecked(ptr_paddr as _),
+        }
+    }
+
     fn inner_ptr(&self) -> *mut T {
         self.inner.as_ptr()
     }

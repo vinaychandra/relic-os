@@ -10,6 +10,7 @@
 #![feature(assert_matches)]
 #![feature(coerce_unsized)]
 #![feature(const_fn)]
+#![feature(const_raw_ptr_to_usize_cast)]
 #![feature(dispatch_from_dyn)]
 #![feature(maybe_uninit_extra)]
 #![feature(naked_functions)]
@@ -274,11 +275,7 @@ fn load_sigma(
         .unwrap();
 
     task_cap
-        .task_create_mut(|task_cap_write_main| {
-            let task_cap_write = task_cap_write_main
-                .descriptor
-                .get_or_insert_with(|| unreachable!());
-
+        .task_create_mut(|task_cap_write| {
             task_cap_write.set_instruction_pointer(binary.entry_point().into());
             task_cap_write.set_stack_pointer(user_stack_end);
             task_cap_write.set_status(capability::TaskStatus::Inactive);
