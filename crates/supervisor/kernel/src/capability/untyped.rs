@@ -7,7 +7,7 @@ use super::*;
 pub struct UntypedMemory {
     start_paddr: PAddrGlobal,
     #[getset(get_copy = "pub")]
-    length: Size,
+    length: usize,
     watermark: PAddrGlobal,
 
     child_mem_item: Option<StoredCap>,
@@ -35,9 +35,8 @@ impl UntypedMemory {
 
 impl UntypedMemory {
     /// Get free space in bytes.
-    pub fn get_free_space(&self) -> Size {
-        let len: u64 = (self.start_paddr + self.length - self.watermark).into();
-        len as usize
+    pub fn get_free_space(&self) -> u64 {
+        self.start_paddr + self.length - self.watermark
     }
 
     /// Allocate a memory region using the given length and
