@@ -128,7 +128,6 @@ impl SystemCall {
 
     /// Convert the in-register representtaion to the system call representation
     /// Reverse of [`Self::as_regs`].
-    #[allow(unused_variables)]
     pub fn from_regs(a: u64, b: u64, c: u64, d: u64, e: u64) -> Result<SystemCall, ()> {
         match a {
             1 => Ok(SystemCall::Yield),

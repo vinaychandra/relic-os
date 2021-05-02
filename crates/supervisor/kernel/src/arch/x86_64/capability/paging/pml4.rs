@@ -38,6 +38,11 @@ impl L4 {
 }
 
 impl CapAccessorMut<'_, L4> {
+    /**
+    Map the given raw page in the provided L4 table at the given virtual address.
+    This will create any required intermediate pages in the provided untyped memory.
+    In this case, it can create upto 3 more levels of paging: each for PDPT, PD and PT.
+    */
     pub fn l4_map(
         &mut self,
         vaddr: VAddr,

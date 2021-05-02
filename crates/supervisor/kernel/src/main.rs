@@ -41,6 +41,7 @@ use std::{cell::RefCell, panic::PanicInfo};
 extern crate alloc;
 extern crate core as std;
 
+#[allow(unused_imports)]
 #[macro_use]
 extern crate relic_utils;
 
@@ -74,7 +75,6 @@ pub mod addr;
 /// Utilities for the kernel.
 pub mod util;
 
-/// Support for common capabilities.
 pub mod capability;
 
 /// Logic to process syscalls.

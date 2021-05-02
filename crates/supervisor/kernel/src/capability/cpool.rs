@@ -1,29 +1,53 @@
+/*!
+Capability Pool support
+
+Storage for capability objects in kernel. All capability objects are
+contained within the cpool. It is a fixed length array containig
+[`RefCell<Capability>`]. The cpool owns the memory in which actual capability
+objects are stored.
+*/
 use crate::util::boxed::Boxed;
 use relic_abi::{cap::CapabilityErrors, prelude::CAddr};
 
 use super::*;
 
+/**
+Capability pool kernel object.
+Although cpool contains the capability objects, it itself is also another
+capability object. It owns the underlying storage for capability objects.
+*/
 #[derive(Debug)]
 pub struct Cpool {
+    /**
+    Owned store of capability objects.
+    */
     pub data: Boxed<CpoolInner>,
+    /**
+    A cpool can be linked to a task. This happens when
+    cpool is the root cpool for a thread.
+    */
     pub linked_task: Option<StoredCap>,
 }
 
+/**
+Storage for the capability objects.
+*/
 #[derive(Debug)]
 pub struct CpoolInner {
     pub unsafe_data: [RefCell<Capability>; 256],
 }
 
-impl Cpool {
-    /// Size of the capability pool.
-    pub fn size(&self) -> usize {
-        self.data.unsafe_data.len()
-    }
+// assert the size of cpool inner.
+assert_eq_size!([u8; 4096 * 4], CpoolInner);
 
+impl Cpool {
+    /**
+    Get a free index in the cpool. This will return a [`CapabilityErrors::CapabilitySlotsFull`]
+    if there are no free indexes to be found.
+    */
     pub fn get_free_index(&self) -> Result<usize, CapabilityErrors> {
         for val in self.data.unsafe_data.iter().enumerate() {
-            let tryborrow = &val.1.try_borrow();
-            if let Ok(borrow) = tryborrow {
+            if let Ok(borrow) = &val.1.try_borrow() {
                 if let CapabilityEnum::EmptyCap { .. } = borrow.capability_data {
                     return Ok(val.0);
                 }
@@ -33,6 +57,10 @@ impl Cpool {
         Err(CapabilityErrors::CapabilitySlotsFull)
     }
 
+    /**
+    Lookup a stored capability given a [`CAddr`]. This acts as if the the current
+    cpool is the root cpool.
+    */
     pub fn lookup(&self, caddr: CAddr) -> Option<StoredCap> {
         if caddr.1 == 0 {
             None
@@ -51,6 +79,17 @@ impl Cpool {
         }
     }
 
+    /**
+    Search the capabilities with the given function. The will recursively go through all
+    cpools and return the capability for which the user provided function returns a 0.
+
+    The function has a depth limit after which the search fails. This is an O(n) function
+    because it goes through every capability stored.
+
+    This function also may skip capabilities if the underlying refcell is already borrowed.
+    If search failed when some are already borrowed, the search returns a
+    [`CapabilityErrors::CapabilitySearchFailedPartial`] instead of [`CapabilityErrors::CapabilitySearchFailed`].
+    */
     pub fn search_fn<F: FnMut(StoredCap) -> bool>(
         &self,
         mut search_fn: F,
@@ -58,12 +97,25 @@ impl Cpool {
         self.search_fn_with_depth(&mut search_fn, 0)
     }
 
+    /**
+    Search the capabilities with the given function. The will recursively go through all
+    cpools and return the capability for which the user provided function returns a 0.
+
+    The function has a depth limit after which the search fails. This is an O(n) function
+    because it goes through every capability stored.
+
+    This function also may skip capabilities if the underlying refcell is already borrowed.
+    If search failed when some are already borrowed, the search returns a
+    [`CapabilityErrors::CapabilitySearchFailedPartial`] instead of [`CapabilityErrors::CapabilitySearchFailed`].
+
+    The depth parameter is used for depth tracking.
+    */
     fn search_fn_with_depth<F: FnMut(StoredCap) -> bool>(
         &self,
         search_fn: &mut F,
         depth: u8,
     ) -> Result<StoredCap, CapabilityErrors> {
-        if depth > 5 {
+        if depth > 10 {
             return Err(CapabilityErrors::CapabilitySearchFailed);
         }
 
@@ -83,6 +135,7 @@ impl Cpool {
                     cap.as_ref().borrow().capability_data,
                     CapabilityEnum::EmptyCap
                 ) {
+                    // Skip empty caps for faster search.
                     return None;
                 }
 
@@ -111,6 +164,10 @@ impl Cpool {
             })
     }
 
+    /**
+    Write to a capability slot if the slot is empty. This will fail
+    if the slot is already occupied with [`CapabilityErrors::CapabilityAlreadyOccupied.]
+     */
     pub fn write_to_if_empty(
         &mut self,
         index: usize,
@@ -127,43 +184,44 @@ impl Cpool {
 }
 
 impl StoredCap {
+    /**
+    Create a cpool from untyped memory. This will store the created cpool
+    in the provided cpool. The function returns the [`StoredCap`] pointing
+    to the created cpool and an index in the cpool where this is created.
+    */
     pub fn cpool_retype_from(
         untyped_memory: &mut UntypedMemory,
         cpool_to_store_in: &mut Cpool,
     ) -> Result<(StoredCap, usize), CapabilityErrors> {
         const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
-
-        let new = CpoolInner {
+        const NEW: CpoolInner = CpoolInner {
             unsafe_data: [NONE_INNER; 256],
         };
 
         let mut result_index = 0;
 
-        let location = untyped_memory.derive(
-            Some(core::mem::align_of::<CpoolInner>()),
-            |memory: *mut CpoolInner| {
-                unsafe {
-                    core::ptr::write(memory, new);
-                }
-                let boxed = unsafe { Boxed::new((memory as u64).into()) };
+        let location = untyped_memory.derive(None, |memory: *mut CpoolInner| {
+            unsafe {
+                core::ptr::write(memory, NEW);
+            }
+            let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
-                let cpool_location_to_store = cpool_to_store_in.get_free_index()?;
+            let cpool_location_to_store = cpool_to_store_in.get_free_index()?;
 
-                let location = cpool_to_store_in.write_to_if_empty(
-                    cpool_location_to_store,
-                    Capability {
-                        capability_data: CapabilityEnum::Cpool(Cpool {
-                            data: boxed,
-                            linked_task: None,
-                        }),
-                        ..Default::default()
-                    },
-                )?;
+            let location = cpool_to_store_in.write_to_if_empty(
+                cpool_location_to_store,
+                Capability {
+                    capability_data: CapabilityEnum::Cpool(Cpool {
+                        data: boxed,
+                        linked_task: None,
+                    }),
+                    ..Default::default()
+                },
+            )?;
 
-                result_index = cpool_location_to_store;
-                Ok(location)
-            },
-        )?;
+            result_index = cpool_location_to_store;
+            Ok(location)
+        })?;
 
         Ok((location, result_index))
     }

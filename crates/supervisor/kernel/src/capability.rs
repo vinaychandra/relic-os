@@ -16,7 +16,7 @@ trees which track derivations from untyped memory, page derivation trees which t
 derivations of virtual memory.
 
 Capabilities in relic do not track the number of owners but use a non-counting Rc:
-[`util::unsafe_ref::UnsafeRef`].
+[`UnsafeRef`].
 */
 
 use relic_abi::cap::CapabilityErrors;
@@ -77,8 +77,11 @@ pub enum CapabilityEnum {
     Task(Task),
 }
 
+/// Smallest page size: 0x1000 bytes.
 pub type BasePage = RawPageActual<0x1000>;
+/// Large page size: 0x20_0000 bytes.
 pub type LargePage = RawPageActual<0x20_0000>;
+/// Huge page size: 0x4000_0000 bytes.
 pub type HugePage = RawPageActual<0x4000_0000>;
 
 /// Kernel capability object. This object is a wrapper around
@@ -250,6 +253,11 @@ macro_rules! cap_create {
     ($cap_name: ty) => {
         paste! {
             impl StoredCap {
+                /**
+                Create a new [`CapAccessor`] with the provided variant. This will return an
+                [`CapabilityErrors::CapabilityMismatch`] if the inner capability type is not the same as the requested type.
+                This function will panic will the capability is already mutably borrowed.
+                */
                 pub fn [< as_ $cap_name:snake >](&self) -> Result<CapAccessor<'_, $cap_name>, CapabilityErrors> {
                     let borrow = self.borrow();
                     let data = if let CapabilityEnum::$cap_name(u) = &borrow.capability_data {
@@ -264,6 +272,11 @@ macro_rules! cap_create {
                     })
                 }
 
+                /**
+                Create a new [`CapAccessorMut`] with the provided variant. This will return an
+                [`CapabilityErrors::CapabilityMismatch`] if the inner capability type is not the same as the requested type.
+                This function will panic will the capability is already borrowed.
+                */
                 pub fn [< as_ $cap_name:snake _mut >](
                     &self,
                 ) -> Result<CapAccessorMut<'_, $cap_name>, CapabilityErrors> {
@@ -296,9 +309,12 @@ cap_create!(HugePage);
 cap_create!(Task);
 
 bitflags! {
-    /// Permissions for the current page.
+    /// Permissions when mapping paging into virtual memory.
     pub struct MapPermissions : u8 {
+        /// Write permissions for the page.
         const WRITE     = 0b0000_0010;
+        /// Execute permissions for the page. In supported architectures,
+        /// this page will be marked non executable if this flag is absent.
         const EXECUTE   = 0b0000_0100;
     }
 }

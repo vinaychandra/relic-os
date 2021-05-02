@@ -1,4 +1,3 @@
-pub mod managed_arc;
 pub mod memory_region;
 
 /// Owned pointer that doesn't use global allocator.

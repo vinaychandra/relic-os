@@ -1,3 +1,8 @@
+/*!
+Task capability support.
+
+Support for kernel threads.
+*/
 use core::ops::Deref;
 use std::{cell::RefCell, ops::DerefMut, sync::atomic::AtomicU64};
 
@@ -12,21 +17,33 @@ use crate::{
     util::boxed::Boxed,
 };
 
-/// Represent a task status.
+/**
+Represent a task status.
+*/
 #[derive(Debug, Clone)]
 pub enum TaskStatus {
-    /// The task is running.
+    /**
+    The task is running.
+    */
     Active,
-    /// The task has never been started before.
+    /**
+    The task has never been started before.
+    */
     Inactive,
 
-    /// The task has made a syscall and is now waiting for response.
+    /**
+    The task has made a syscall and is now waiting for response.
+    */
     SyscalledAndWaiting(Option<SystemCall>),
-    /// The task has made a syscall and is response is ready.
-    /// Can optionally return upto two values.
+    /**
+    The task has made a syscall and is response is ready.
+    Can optionally return upto two values.
+    */
     SyscalledReadyToResume(CapabilityErrors, u64, u64),
 
-    /// Unknown task state.
+    /**
+    Unknown task state.
+    */
     Unknown,
 }
 

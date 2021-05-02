@@ -5,6 +5,7 @@ use core::convert::TryFrom;
 #[repr(u64)]
 #[non_exhaustive]
 pub enum CapabilityErrors {
+    /// No capability error.
     None = 0,
     /// This capability slot is already occupied.
     CapabilityAlreadyOccupied,
@@ -12,6 +13,8 @@ pub enum CapabilityErrors {
     CapabilitySlotsFull,
     /// A search for a capability or an empty slot failed.
     CapabilitySearchFailed,
+    /// A search for a capability or an empty slot failed but all
+    /// slots may not have been searched.
     CapabilitySearchFailedPartial,
     /// The requested capability and provided capabilities mismatch.
     CapabilityMismatch,

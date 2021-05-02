@@ -6,11 +6,12 @@ use relic_abi::cap::CapabilityErrors;
 pub use pml4::*;
 pub use raw_page::*;
 
-use crate::addr::PAddrGlobal;
-use crate::arch::globals::BASE_PAGE_LENGTH;
-use crate::arch::paging::table::*;
-use crate::capability::*;
-use crate::util::boxed::Boxed;
+use crate::{
+    addr::PAddrGlobal,
+    arch::{globals::BASE_PAGE_LENGTH, paging::table::*},
+    capability::*,
+    util::boxed::Boxed,
+};
 
 macro_rules! paging_cap_impl {
     ($paging: ty, $inner: ty, $child: ty, include_child_structs) => {
@@ -25,7 +26,10 @@ macro_rules! paging_cap_impl {
             }
 
             impl $paging {
-                pub fn new(boxed: Boxed<[<$inner Table>]>) -> Self {
+                /**
+                Create a new paging capability.
+                */
+                pub const fn new(boxed: Boxed<[<$inner Table>]>) -> Self {
                     Self {
                         page_data: boxed,
                         child_paging_item: None,
@@ -59,6 +63,11 @@ macro_rules! paging_cap_impl {
             }
 
             impl StoredCap {
+                /**
+                Create a page capability from untyped memory. This will store the created cap
+                in the provided cpool. The function returns the [`StoredCap`] pointing
+                to the created capability and an index in the cpool where this is created.
+                */
                 pub fn [< $inner:lower _retype_from >](
                     untyped: &mut CapAccessorMut<'_, UntypedMemory>,
                     cpool_to_store_in: &mut Cpool,

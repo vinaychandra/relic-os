@@ -1,3 +1,7 @@
+/*!
+Registers for the architecture.
+*/
+
 use crossbeam_utils::atomic::AtomicCell;
 use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
 use x86_64::{
@@ -7,6 +11,7 @@ use x86_64::{
 
 use crate::capability::TaskStatus;
 
+/// Set of registers in the architecture.
 #[derive(Default, Debug, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
 #[repr(C)]
@@ -137,6 +142,8 @@ fn user_switching_fn(
 }
 
 // Syscall: rcx -> rdi (IP) ... rdi -> info
+/// Syscall entry function. This function jumps to [`syscall_entry_fn_2`] after
+/// storing stack information.
 #[inline(never)]
 #[naked]
 unsafe extern "C" fn syscall_entry_fn() {
@@ -155,6 +162,7 @@ static REGISTERS: AtomicCell<Registers> = AtomicCell::new(Registers::empty());
 #[thread_local]
 static NEXT_STATE: AtomicCell<TaskStatus> = AtomicCell::new(TaskStatus::Unknown);
 
+/// Store the register information and stitch back to kernel stack.
 unsafe extern "C" fn syscall_entry_fn_2(
     a: u64,
     b: u64,
