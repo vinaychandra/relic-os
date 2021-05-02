@@ -5,8 +5,10 @@ use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
 
 use crate::{
     addr::VAddr,
-    arch::task::registers::Registers,
-    capability::{Capability, CapabilityEnum, Cpool, StoredCap, UntypedMemory},
+    arch::{capability::paging::L4, task::registers::Registers},
+    capability::{
+        BasePage, CapAccessorMut, Capability, CapabilityEnum, Cpool, StoredCap, UntypedMemory,
+    },
     util::boxed::Boxed,
 };
 
@@ -124,75 +126,58 @@ impl StoredCap {
 
         Ok((location, result_index))
     }
+}
 
+impl CapAccessorMut<'_, Task> {
     pub fn task_set_cpool(
-        &self,
-        cap: StoredCap,
-        cpool: Option<&mut Cpool>, // Option `cap`
+        &mut self,
+        cap: &mut CapAccessorMut<'_, Cpool>,
     ) -> Result<(), CapabilityErrors> {
-        self.task_create_mut(|desc| {
-            if desc.cpool.is_some() {
-                Err(CapabilityErrors::CapabilityAlreadyOccupied)?
-            }
+        if self.cpool.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+        if cap.linked_task.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
 
-            let f = |cp: &mut Cpool| -> Result<(), CapabilityErrors> {
-                if cp.linked_task.is_some() {
-                    Err(CapabilityErrors::CapabilityAlreadyOccupied)?
-                }
-
-                cp.linked_task = Some(self.clone());
-                Ok(())
-            };
-
-            if let Some(cp) = cpool {
-                f(cp)?;
-            } else {
-                cap.cpool_create_mut(|cp| f(cp))?;
-            }
-
-            desc.cpool = Some(cap.clone());
-            Ok(())
-        })
+        cap.linked_task = Some(self.cap().clone());
+        self.cpool = Some(cap.cap().clone());
+        Ok(())
     }
 
-    pub fn task_set_top_level_table(&self, cap: StoredCap) -> Result<(), CapabilityErrors> {
-        self.task_create_mut(|desc| {
-            if desc.top_level_table.is_some() {
-                Err(CapabilityErrors::CapabilityAlreadyOccupied)?
-            }
+    pub fn task_set_top_level_table(
+        &mut self,
+        l4: &mut CapAccessorMut<'_, L4>,
+    ) -> Result<(), CapabilityErrors> {
+        if self.top_level_table.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+        if l4.linked_task.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
 
-            cap.l4_create_mut(|l4| {
-                if l4.linked_task.is_some() {
-                    Err(CapabilityErrors::CapabilityAlreadyOccupied)?
-                }
+        l4.linked_task = Some(self.cap().clone());
+        self.top_level_table = Some(l4.cap().clone());
 
-                l4.linked_task = Some(self.clone());
-                Ok(())
-            })?;
-
-            desc.top_level_table = Some(cap.clone());
-            Ok(())
-        })
+        Ok(())
     }
 
-    pub fn task_set_task_buffer(&self, cap: StoredCap) -> Result<(), CapabilityErrors> {
-        self.task_create_mut(|desc| {
-            if desc.task_buffer.is_some() {
-                Err(CapabilityErrors::CapabilityAlreadyOccupied)?
-            }
+    pub fn task_set_task_buffer(
+        &mut self,
+        task_buffer: &mut CapAccessorMut<'_, BasePage>,
+    ) -> Result<(), CapabilityErrors> {
+        if self.task_buffer.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
 
-            cap.base_page_create_mut(|raw_page| {
-                if raw_page.linked_task.is_some() {
-                    Err(CapabilityErrors::CapabilityAlreadyOccupied)?
-                }
+        if task_buffer.linked_task.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
 
-                raw_page.linked_task = Some(self.clone());
-                Ok(())
-            })?;
+        task_buffer.linked_task = Some(self.cap().clone());
 
-            desc.task_buffer = Some(cap.clone());
-            Ok(())
-        })
+        self.task_buffer = Some(task_buffer.cap().clone());
+        Ok(())
     }
 }
 
@@ -223,11 +208,10 @@ impl TaskDescriptor {
         core::mem::swap(&mut self.status, &mut current_status);
 
         if let Some(pml4) = self.top_level_table.clone() {
-            pml4.l4_create_mut(|l4| {
-                l4.switch_to();
-                Ok(())
-            })
-            .expect("Task's top level page table is not PML4");
+            let mut l4 = pml4
+                .as_l4_mut()
+                .expect("Task's top level page table is not PML4");
+            l4.switch_to();
         } else {
             panic!("Cannot start task without pml4");
         }
@@ -268,29 +252,24 @@ impl Scheduler {
     }
 
     /// Add a task with the given priority.
-    pub fn add_task_with_priority(&self, cap: StoredCap) {
-        cap.task_create_mut(|new_task| {
-            let task_priority = new_task.priority as usize;
-            assert!(task_priority < 16);
+    pub fn add_task_with_priority(&self, new_task: &mut CapAccessorMut<'_, Task>) {
+        let task_priority = new_task.priority as usize;
+        assert!(task_priority < 16);
 
-            let current_list = &self.current_list[task_priority * 2 + 1];
-            new_task.prev_task_item = unsafe { Some(StoredCap::from_raw(current_list)) };
+        let current_list = &self.current_list[task_priority * 2 + 1];
+        new_task.prev_task_item = unsafe { Some(StoredCap::from_raw(current_list)) };
 
-            let mut list_accessor = current_list.borrow_mut();
-            let to_be_second = list_accessor.get_next_task_item_mut().take();
-            *list_accessor.get_next_task_item_mut() = Some(cap.clone());
+        let mut list_accessor = current_list.borrow_mut();
+        let to_be_second = list_accessor.get_next_task_item_mut().take();
+        *list_accessor.get_next_task_item_mut() = Some(new_task.cap().clone());
 
-            new_task.next_task_item = to_be_second.clone();
-            if let Some(to_be_second_val) = to_be_second {
-                *to_be_second_val
-                    .as_ref()
-                    .borrow_mut()
-                    .get_prev_task_item_mut() = Some(cap.clone());
-            }
-
-            Ok(())
-        })
-        .unwrap();
+        new_task.next_task_item = to_be_second.clone();
+        if let Some(to_be_second_val) = to_be_second {
+            *to_be_second_val
+                .as_ref()
+                .borrow_mut()
+                .get_prev_task_item_mut() = Some(new_task.cap().clone());
+        }
     }
 
     /// Get the next task to run.
@@ -313,26 +292,19 @@ impl Scheduler {
             }
 
             if let Some(task_to_execute) = current_queue_item {
-                task_to_execute
-                    .task_create_mut(|task_to_execute_writer| {
-                        let to_be_first = task_to_execute_writer.next_task_item.take();
-                        let cur = task_to_execute_writer.prev_task_item.take();
-                        debug_assert!(cur.is_some(), "This must be the 'root' of priority");
-                        if let Some(next) = to_be_first.clone() {
-                            next.task_create_mut(|t| {
-                                t.prev_task_item = cur;
-                                Ok(())
-                            })
-                            .unwrap();
-                        }
+                let mut task_to_execute_writer = task_to_execute.as_task_mut().unwrap();
+                let to_be_first = task_to_execute_writer.next_task_item.take();
+                let cur = task_to_execute_writer.prev_task_item.take();
+                debug_assert!(cur.is_some(), "This must be the 'root' of priority");
+                if let Some(next) = to_be_first.clone() {
+                    next.as_task_mut().unwrap().prev_task_item = cur;
+                }
 
-                        *self.current_list[i * 2]
-                            .borrow_mut()
-                            .get_next_task_item_mut() = to_be_first;
-                        Ok(())
-                    })
-                    .unwrap();
+                *self.current_list[i * 2]
+                    .borrow_mut()
+                    .get_next_task_item_mut() = to_be_first;
 
+                core::mem::drop(task_to_execute_writer);
                 return Some(task_to_execute);
             }
         }
@@ -344,22 +316,21 @@ impl Scheduler {
         loop {
             let task = self.get_task_to_run();
             if let Some(task_cap) = task {
-                let result_status = task_cap
-                    .task_create_mut(|desc| {
-                        let task_status = desc.status.clone();
+                let mut desc = task_cap.as_task_mut().unwrap();
+                let result_status = {
+                    let task_status = desc.status.clone();
 
-                        let result_status = match task_status {
-                            TaskStatus::Inactive => desc.switch_to(),
-                            TaskStatus::SyscalledReadyToResume(..) => desc.switch_to(),
-                            default => panic!("Cannot run a task in '{:?}' state", default),
-                        };
-                        Ok(result_status)
-                    })
-                    .unwrap();
+                    let result_status = match task_status {
+                        TaskStatus::Inactive => desc.switch_to(),
+                        TaskStatus::SyscalledReadyToResume(..) => desc.switch_to(),
+                        default => panic!("Cannot run a task in '{:?}' state", default),
+                    };
+                    result_status
+                };
 
                 match result_status {
                     TaskStatus::SyscalledAndWaiting(data) => {
-                        crate::syscall_processor::process_syscall(&task_cap, data, self)
+                        crate::syscall_processor::process_syscall(&mut desc, data, self)
                     }
                     default => panic!("Cannot result in this result state: {:?}", default),
                 };
@@ -402,72 +373,41 @@ mod tests {
             let scheduler = Scheduler::new();
 
             let task1 = StoredCap::task_retype_from(untyped, &mut root_cpool, 5).unwrap();
-            task1
-                .0
-                .task_create_mut(|t| {
-                    assert!(t.descriptor.task_id == 1);
-                    t.descriptor.priority = 5;
-                    Ok(())
-                })
-                .unwrap();
+            let mut task1_0 = task1.0.as_task_mut().unwrap();
+            assert!(task1_0.descriptor.task_id == 1);
+            task1_0.descriptor.priority = 5;
+
             let task2 = StoredCap::task_retype_from(untyped, &mut root_cpool, 5).unwrap();
-            task2
-                .0
-                .task_create_mut(|t| {
-                    assert!(t.descriptor.task_id == 2);
-                    t.descriptor.priority = 5;
-                    Ok(())
-                })
-                .unwrap();
+            let mut task2_0 = task2.0.as_task_mut().unwrap();
+            assert!(task2_0.descriptor.task_id == 2);
+            task2_0.descriptor.priority = 5;
+
             let task3 = StoredCap::task_retype_from(untyped, &mut root_cpool, 5).unwrap();
-            task3
-                .0
-                .task_create_mut(|t| {
-                    assert!(t.descriptor.task_id == 3);
-                    t.descriptor.priority = 10;
-                    Ok(())
-                })
-                .unwrap();
+            let mut task3_0 = task3.0.as_task_mut().unwrap();
+            assert!(task3_0.descriptor.task_id == 3);
+            task3_0.descriptor.priority = 10;
 
-            scheduler.add_task_with_priority(task1.0);
-            scheduler.add_task_with_priority(task3.0);
-            scheduler.add_task_with_priority(task2.0);
-
-            let next_task = scheduler.get_task_to_run();
-            assert!(next_task.is_some());
-            assert_eq!(
-                3,
-                next_task
-                    .unwrap()
-                    .task_create_mut(|t| Ok(t.descriptor.task_id))
-                    .unwrap()
-            );
+            scheduler.add_task_with_priority(&mut task1_0);
+            scheduler.add_task_with_priority(&mut task3_0);
+            scheduler.add_task_with_priority(&mut task2_0);
 
             let next_task = scheduler.get_task_to_run().unwrap();
-            assert_eq!(
-                2,
-                next_task
-                    .task_create_mut(|t| Ok(t.descriptor.task_id))
-                    .unwrap()
-            );
-            scheduler.add_task_with_priority(next_task);
+            let next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(3, next_task_val.descriptor.task_id);
 
             let next_task = scheduler.get_task_to_run().unwrap();
-            assert_eq!(
-                1,
-                next_task
-                    .task_create_mut(|t| Ok(t.descriptor.task_id))
-                    .unwrap()
-            );
-            scheduler.add_task_with_priority(next_task);
+            let mut next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(2, next_task_val.descriptor.task_id);
+            scheduler.add_task_with_priority(&mut next_task_val);
 
             let next_task = scheduler.get_task_to_run().unwrap();
-            assert_eq!(
-                1,
-                next_task
-                    .task_create_mut(|t| Ok(t.descriptor.task_id))
-                    .unwrap()
-            );
+            let mut next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(1, next_task_val.descriptor.task_id);
+            scheduler.add_task_with_priority(&mut next_task_val);
+
+            let next_task = scheduler.get_task_to_run().unwrap();
+            let next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(1, next_task_val.descriptor.task_id);
         }
     }
 }

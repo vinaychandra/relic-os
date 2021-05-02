@@ -79,8 +79,18 @@ impl Cpool {
                     return None;
                 }
 
-                let cpool_search =
-                    cap.cpool_create(|cpool| cpool.search_fn_with_depth(search_fn, depth + 1));
+                if matches!(
+                    cap.as_ref().borrow().capability_data,
+                    CapabilityEnum::EmptyCap
+                ) {
+                    return None;
+                }
+
+                let cpool_search = cap
+                    .as_cpool()
+                    .map(|cpool| cpool.search_fn_with_depth(search_fn, depth + 1))
+                    .flatten();
+
                 if cpool_search.is_ok() {
                     return cpool_search.ok();
                 }
@@ -92,10 +102,12 @@ impl Cpool {
 
                 None
             })
-            .ok_or(if partial_search {
-                CapabilityErrors::CapabilitySearchFailedPartial
-            } else {
-                CapabilityErrors::CapabilitySearchFailed
+            .ok_or_else(|| {
+                if partial_search {
+                    CapabilityErrors::CapabilitySearchFailedPartial
+                } else {
+                    CapabilityErrors::CapabilitySearchFailed
+                }
             })
     }
 

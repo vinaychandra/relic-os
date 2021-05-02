@@ -91,8 +91,8 @@ impl UntypedMemory {
 
             let to_be_second = self.child_mem_item.take();
             if let Some(ref sec) = to_be_second {
-                let mut sec_write = sec.borrow_mut();
-                sec_write.prev_mem_item = Some(f_success.clone());
+                let mut sec_write = sec.as_ptr();
+                unsafe { (*sec_write).prev_mem_item = Some(f_success.clone()) };
             }
 
             fs_write.next_mem_item = to_be_second;

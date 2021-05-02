@@ -11,7 +11,9 @@ pub struct L4 {
 }
 
 impl L4 {
+    #[allow(unused_mut)]
     pub fn new(mut boxed: Boxed<PML4Table>) -> Self {
+        #[cfg(not(test))]
         unsafe {
             let current_page_table_paddr: u64 = utils::cr3().into();
             let current_page_table: &PML4 = &*(current_page_table_paddr as *const _);
@@ -35,13 +37,13 @@ impl L4 {
     }
 }
 
-impl StoredCap {
+impl CapAccessorMut<'_, L4> {
     pub fn l4_map(
-        &self,
+        &mut self,
         vaddr: VAddr,
         raw_page: &StoredCap,
-        untyped: &mut UntypedMemory,
-        cpool: &mut Cpool,
+        untyped: &mut CapAccessorMut<'_, UntypedMemory>,
+        cpool: &mut CapAccessorMut<'_, Cpool>,
         perms: MapPermissions,
     ) -> Result<(), CapabilityErrors> {
         // get size of raw_page
@@ -58,95 +60,101 @@ impl StoredCap {
         let pd_index = pd_index(vaddr);
         let pt_index = pt_index(vaddr);
 
-        let pdpt_cap = {
-            let mut l4_address = PAddrGlobal::new(0);
+        // L4
+        let mut l4_address = self.page_data[pml4_index].get_address().to_paddr_global();
+        if !(self.page_data[pml4_index].is_present()) {
+            let pdpt = StoredCap::pdpt_retype_from(untyped, cpool)?;
+            let mut pdpt_l3 = pdpt.0.as_l3_mut().unwrap();
+            l4_address = pdpt_l3.page_data.paddr_global();
 
-            if !self.l4_create(|l4_read| {
-                l4_address = l4_read.page_data[pml4_index]
-                    .get_address()
-                    .to_paddr_global();
-                Ok(l4_read.page_data[pml4_index].is_present())
-            })? {
-                let pdpt = StoredCap::pdpt_retype_from(untyped, cpool)?;
-                l4_address = pdpt.0.l3_create(|a| Ok(a.page_data.paddr_global()))?;
+            self.l4_map_l3(pml4_index, &mut pdpt_l3, None)?;
+        }
+        let pdpt = cpool.search_fn(|cap| {
+            cap.as_l3_mut()
+                .map(|v| v.start_paddr() == l4_address)
+                .unwrap_or(false)
+        })?;
+        let mut pdpt_cap = pdpt.as_l3_mut().unwrap();
 
-                self.l4_map_l3(pml4_index, &pdpt.0, None)?;
+        // L3
+        if page_type == 2 {
+            if pd_index != 0 || pt_index != 0 {
+                return Err(CapabilityErrors::MemoryAlignmentFailure);
             }
 
-            cpool.search_fn(|cap| {
-                cap.l3_create(|l3| Ok(l3.start_paddr() == l4_address))
-                    .unwrap_or(false)
-            })?
-        };
+            let mut target_perms = PDPTEntry::empty();
+            if perms.contains(MapPermissions::WRITE) {
+                target_perms |= PDPTEntry::READ_WRITE;
+            }
+            if !perms.contains(MapPermissions::EXECUTE) {
+                target_perms |= PDPTEntry::EXECUTE_DISABLE;
+            }
+            return pdpt_cap.l3_map_huge_page(
+                pdpt_index,
+                &mut raw_page.as_huge_page_mut().unwrap(),
+                Some(target_perms),
+            );
+        }
 
-        let pd_cap = {
-            let mut l3_address = PAddrGlobal::new(0);
+        let mut l3_address = pdpt_cap.page_data[pdpt_index]
+            .get_address()
+            .to_paddr_global();
 
-            if page_type == 2 {
-                if pd_index != 0 || pt_index != 0 {
-                    return Err(CapabilityErrors::MemoryAlignmentFailure);
-                }
+        if !(pdpt_cap.page_data[pdpt_index].is_present()) {
+            let pd = StoredCap::pd_retype_from(untyped, cpool)?;
+            let mut pd_l2 = pd.0.as_l2_mut().unwrap();
+            l3_address = pd_l2.page_data.paddr_global();
 
-                let mut target_perms = PDPTEntry::empty();
-                if perms.contains(MapPermissions::WRITE) {
-                    target_perms |= PDPTEntry::READ_WRITE;
-                }
-                if !perms.contains(MapPermissions::EXECUTE) {
-                    target_perms |= PDPTEntry::EXECUTE_DISABLE;
-                }
-                return pdpt_cap.l3_map_huge_page(pdpt_index, raw_page, Some(target_perms));
+            pdpt_cap.l3_map_l2(pdpt_index, &mut pd_l2, None)?;
+        }
+
+        let pd = cpool.search_fn(|cap| {
+            cap.as_l2_mut()
+                .map(|l2| l2.start_paddr() == l3_address)
+                .unwrap_or(false)
+        })?;
+
+        let mut pd_cap = pd.as_l2_mut().unwrap();
+
+        // L2
+        if page_type == 3 {
+            if pt_index != 0 {
+                return Err(CapabilityErrors::MemoryAlignmentFailure);
             }
 
-            if !pdpt_cap.l3_create(|l3_read| {
-                l3_address = l3_read.page_data[pdpt_index]
-                    .get_address()
-                    .to_paddr_global();
-                Ok(l3_read.page_data[pdpt_index].is_present())
-            })? {
-                let pd = StoredCap::pd_retype_from(untyped, cpool)?;
-                l3_address = pd.0.l2_create(|a| Ok(a.page_data.paddr_global()))?;
-                pdpt_cap.l3_map_l2(pdpt_index, &pd.0, None)?;
+            let mut target_perms = PDEntry::empty();
+            if perms.contains(MapPermissions::WRITE) {
+                target_perms |= PDEntry::READ_WRITE;
             }
-
-            cpool.search_fn(|cap| {
-                cap.l2_create(|l2| Ok(l2.start_paddr() == l3_address))
-                    .unwrap_or(false)
-            })?
-        };
-
-        let pt_cap = {
-            let mut l2_address = PAddrGlobal::new(0);
-
-            if page_type == 3 {
-                if pt_index != 0 {
-                    return Err(CapabilityErrors::MemoryAlignmentFailure);
-                }
-
-                let mut target_perms = PDEntry::empty();
-                if perms.contains(MapPermissions::WRITE) {
-                    target_perms |= PDEntry::READ_WRITE;
-                }
-                if !perms.contains(MapPermissions::EXECUTE) {
-                    target_perms |= PDEntry::EXECUTE_DISABLE;
-                }
-                return pd_cap.l2_map_large_page(pd_index, raw_page, Some(target_perms));
+            if !perms.contains(MapPermissions::EXECUTE) {
+                target_perms |= PDEntry::EXECUTE_DISABLE;
             }
+            return pd_cap.l2_map_large_page(
+                pd_index,
+                &mut raw_page.as_large_page_mut().unwrap(),
+                Some(target_perms),
+            );
+        }
 
-            if !pd_cap.l2_create(|l2_read| {
-                l2_address = l2_read.page_data[pd_index].get_address().to_paddr_global();
-                Ok(l2_read.page_data[pd_index].is_present())
-            })? {
-                let pt = StoredCap::pt_retype_from(untyped, cpool)?;
-                l2_address = pt.0.l1_create(|a| Ok(a.page_data.paddr_global()))?;
-                pd_cap.l2_map_l1(pd_index, &pt.0, None)?;
-            }
+        let mut l2_address = pd_cap.page_data[pd_index].get_address().to_paddr_global();
 
-            cpool.search_fn(|cap| {
-                cap.l1_create(|l1| Ok(l1.start_paddr() == l2_address))
-                    .unwrap_or(false)
-            })?
-        };
+        if !(pd_cap.page_data[pd_index].is_present()) {
+            let pt = StoredCap::pt_retype_from(untyped, cpool)?;
+            let mut pt_l1 = pt.0.as_l1_mut().unwrap();
+            l2_address = pt_l1.page_data.paddr_global();
 
+            pd_cap.l2_map_l1(pd_index, &mut pt_l1, None)?;
+        }
+
+        let pt = cpool.search_fn(|cap| {
+            cap.as_l1_mut()
+                .map(|l1| l1.start_paddr() == l2_address)
+                .unwrap_or(false)
+        })?;
+
+        let mut pt_cap = pt.as_l1_mut().unwrap();
+
+        // L1
         let mut target_perms = PTEntry::empty();
         if perms.contains(MapPermissions::WRITE) {
             target_perms |= PTEntry::READ_WRITE;
@@ -154,6 +162,10 @@ impl StoredCap {
         if !perms.contains(MapPermissions::EXECUTE) {
             target_perms |= PTEntry::EXECUTE_DISABLE;
         }
-        pt_cap.l1_map_base_page(pt_index, raw_page, Some(target_perms))
+        pt_cap.l1_map_base_page(
+            pt_index,
+            &mut raw_page.as_base_page_mut().unwrap(),
+            Some(target_perms),
+        )
     }
 }

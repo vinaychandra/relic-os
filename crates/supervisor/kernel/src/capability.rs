@@ -1,5 +1,5 @@
 use relic_abi::cap::CapabilityErrors;
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell, RefMut};
 
 use crate::{addr::PAddrGlobal, arch::capability::paging::*, util::unsafe_ref::UnsafeRef};
 
@@ -102,32 +102,79 @@ impl Capability {
     }
 }
 
+#[derive(Getters)]
+pub struct CapAccessor<'a, T> {
+    _borrow: Ref<'a, Capability>,
+    data: *const T,
+    #[getset(get = "pub")]
+    cap: StoredCap,
+}
+
+#[derive(Getters)]
+pub struct CapAccessorMut<'a, T> {
+    _borrow: RefMut<'a, Capability>,
+    data: *mut T,
+    #[getset(get = "pub")]
+    cap: StoredCap,
+}
+
+impl<T> core::ops::Deref for CapAccessor<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        // This is safe because this pointer is valid when the borrow is alive.
+        unsafe { &*self.data }
+    }
+}
+
+impl<T> core::ops::Deref for CapAccessorMut<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        // This is safe because this pointer is valid when the borrow is alive.
+        unsafe { &*self.data }
+    }
+}
+
+impl<T> core::ops::DerefMut for CapAccessorMut<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        // This is safe because this pointer is valid when the borrow is alive.
+        unsafe { &mut *self.data }
+    }
+}
+
 macro_rules! cap_create {
-    ($data: tt) => {
+    ($cap_name: ty) => {
         paste! {
             impl StoredCap {
-                pub fn [< $data:snake _create >]<F, R>(&self, f: F) -> Result<R, CapabilityErrors>
-                where
-                    F: FnOnce(&$data) -> Result<R, CapabilityErrors>,
-                {
-                    let cap = self.borrow();
-                    if let CapabilityEnum::$data(data) = &cap.capability_data {
-                        f(data)
+                pub fn [< as_ $cap_name:snake >](&self) -> Result<CapAccessor<'_, $cap_name>, CapabilityErrors> {
+                    let borrow = self.borrow();
+                    let data = if let CapabilityEnum::$cap_name(u) = &borrow.capability_data {
+                        u as *const $cap_name
                     } else {
-                        Err(CapabilityErrors::CapabilityMismatch)
-                    }
+                        return Err(CapabilityErrors::CapabilityMismatch);
+                    };
+                    Ok(CapAccessor {
+                        _borrow: borrow,
+                        data,
+                        cap: self.clone(),
+                    })
                 }
 
-                pub fn [< $data:snake _create_mut >]<F, R>(&self, f: F) -> Result<R, CapabilityErrors>
-                where
-                    F: FnOnce(&mut $data) -> Result<R, CapabilityErrors>,
-                {
-                    let mut cap = self.borrow_mut();
-                    if let CapabilityEnum::$data(data) = &mut cap.capability_data {
-                        f(data)
+                pub fn [< as_ $cap_name:snake _mut >](
+                    &self,
+                ) -> Result<CapAccessorMut<'_, $cap_name>, CapabilityErrors> {
+                    let mut borrow = self.borrow_mut();
+                    let data = if let CapabilityEnum::$cap_name(u) = &mut borrow.capability_data {
+                        u as *mut $cap_name
                     } else {
-                        Err(CapabilityErrors::CapabilityMismatch)
-                    }
+                        return Err(CapabilityErrors::CapabilityMismatch);
+                    };
+                    Ok(CapAccessorMut {
+                        _borrow: borrow,
+                        data,
+                        cap: self.clone(),
+                    })
                 }
             }
         }

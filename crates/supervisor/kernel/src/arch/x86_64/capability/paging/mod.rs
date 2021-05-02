@@ -60,7 +60,7 @@ macro_rules! paging_cap_impl {
 
             impl StoredCap {
                 pub fn [< $inner:lower _retype_from >](
-                    untyped: &mut UntypedMemory,
+                    untyped: &mut CapAccessorMut<'_, UntypedMemory>,
                     cpool_to_store_in: &mut Cpool,
                 ) -> Result<(StoredCap, usize), CapabilityErrors> {
                     let mut result_index = 0;
@@ -74,10 +74,11 @@ macro_rules! paging_cap_impl {
                             let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
                             let stored_index = cpool_to_store_in.get_free_index()?;
+                            let capability_data = CapabilityEnum::$paging($paging::new(boxed));
                             let cap = cpool_to_store_in.write_to_if_empty(
                                 stored_index,
                                 Capability {
-                                    capability_data: CapabilityEnum::$paging($paging::new(boxed)),
+                                    capability_data,
                                     ..Default::default()
                                 },
                             )?;
@@ -105,52 +106,48 @@ macro_rules! paging_cap_impl {
     };
     ($paging: ty, $inner: ty, $child: ty, map_fn $(, $extra_flags:tt)?) => {
         paste! {
-            impl StoredCap {
+            impl CapAccessorMut<'_, $paging> {
                 pub fn [< $paging:lower _map_ $child:snake >](
-                    &self,
+                    &mut self,
                     index: usize,
-                    child: &StoredCap,
+                    child: &mut CapAccessorMut<'_, $child>,
                     permissions: Option<[< $inner Entry >]>,
                 )
                     -> Result<(), CapabilityErrors> {
-                    self.[<$paging:lower _create_mut>](|self_write| {
-                        if self_write.page_data[index].is_present() {
+
+                        if self.page_data[index].is_present() {
                             return Err(CapabilityErrors::MemoryAlreadyMapped);
                         }
-                        let soon_to_be_second = self_write.child_paging_item.clone();
+                        let soon_to_be_second = self.child_paging_item.clone();
 
-                        child.[<$child:snake _create_mut>](|child_write| {
-                            if child_write.next_paging_item.is_some() {
-                                return Err(CapabilityErrors::MemoryAlreadyMapped);
-                            }
+                        if child.next_paging_item.is_some() {
+                            return Err(CapabilityErrors::MemoryAlreadyMapped);
+                        }
 
-                            if let Some(perms) = permissions {
-                                self_write.page_data[index] = [< $inner Entry >]::new(
-                                    child_write.start_paddr().to_paddr(),
-                                    [< $inner Entry >]::PRESENT | [< $inner Entry >]::USERSPACE | perms
-                                    $( | [< $inner Entry >]::$extra_flags )?,
-                                );
-                            } else {
-                                self_write.page_data[index] = [< $inner Entry >]::new(
-                                    child_write.start_paddr().to_paddr(),
-                                    [< $inner Entry >]::PRESENT | [< $inner Entry >]::USERSPACE | [< $inner Entry >]::READ_WRITE
-                                    $( | [< $inner Entry >]::$extra_flags )?,
-                                );
-                            }
+                        if let Some(perms) = permissions {
+                            self.page_data[index] = [< $inner Entry >]::new(
+                                child.start_paddr().to_paddr(),
+                                [< $inner Entry >]::PRESENT | [< $inner Entry >]::USERSPACE | perms
+                                $( | [< $inner Entry >]::$extra_flags )?,
+                            );
+                        } else {
+                            self.page_data[index] = [< $inner Entry >]::new(
+                                child.start_paddr().to_paddr(),
+                                [< $inner Entry >]::PRESENT | [< $inner Entry >]::USERSPACE | [< $inner Entry >]::READ_WRITE
+                                $( | [< $inner Entry >]::$extra_flags )?,
+                            );
+                        }
 
-                            child_write.next_paging_item = soon_to_be_second.clone();
-                            child_write.prev_paging_item = Some(self.clone());
-                            Ok(())
-                        })?;
+                        child.next_paging_item = soon_to_be_second.clone();
+                        child.prev_paging_item = Some(self.cap().clone());
 
                         if let Some(soon_to_be_sec_val) = soon_to_be_second {
                             *soon_to_be_sec_val.borrow_mut().get_prev_paging_item_mut() =
-                                Some(child.clone());
+                                Some(child.cap().clone());
                         }
 
-                        self_write.child_paging_item = Some(child.clone());
+                        self.child_paging_item = Some(child.cap().clone());
                         Ok(())
-                    })
                 }
             }
         }
@@ -169,6 +166,8 @@ paging_cap_impl!(L3, PDPT, HugePage, map_fn, HUGE_PAGE);
 mod tests {
     use std::{cell::RefCell, mem::MaybeUninit};
 
+    use crate::util::unsafe_ref::UnsafeRef;
+
     use super::*;
 
     #[test]
@@ -177,12 +176,12 @@ mod tests {
         let raw_addr = Box::into_raw(raw_memory) as u64;
         let addr = PAddrGlobal::new(raw_addr);
 
-        let mut untyped_memory = unsafe { UntypedMemory::bootstrap(addr, 0x20_0000 * 5) };
+        let untyped_memory = unsafe { UntypedMemory::bootstrap(addr, 0x20_0000 * 5) };
         const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
         let root_cpool_inner = CpoolInner {
             unsafe_data: [NONE_INNER; 256],
         };
-        let mut root_cpool = Cpool {
+        let root_cpool = Cpool {
             linked_task: None,
             data: unsafe {
                 Boxed::new(PAddrGlobal::new(
@@ -190,73 +189,83 @@ mod tests {
                 ))
             },
         };
+        let untyped_ref = RefCell::new(untyped_memory);
+        let untyped_unsafe_ref = unsafe { UnsafeRef::from_raw(&untyped_ref) };
+        let mut untyped = untyped_unsafe_ref.as_untyped_memory_mut().unwrap();
 
-        if let CapabilityEnum::UntypedMemory(untyped) = &mut untyped_memory.capability_data {
-            let l4 = StoredCap::pml4_retype_from(untyped, &mut root_cpool).unwrap();
-            let raw_page =
-                StoredCap::base_page_retype_from::<[u8; 10]>(untyped, &mut root_cpool).unwrap();
-            l4.0.l4_map(
-                0u64.into(),
-                &raw_page.0,
-                untyped,
-                &mut root_cpool,
-                MapPermissions::WRITE,
-            )
-            .unwrap();
+        let rcpool_cap = Capability {
+            capability_data: CapabilityEnum::Cpool(root_cpool),
+            ..Default::default()
+        };
+        let cpool_ref = RefCell::new(rcpool_cap);
+        let cpool_unsafe_ref = unsafe { UnsafeRef::from_raw(&cpool_ref) };
+        let mut cpool = cpool_unsafe_ref.as_cpool_mut().unwrap();
 
-            // We need 5 caps until now: l4, raw, l3, l2, l1
-            assert!(matches!(
-                root_cpool_inner.unsafe_data[4].borrow().capability_data,
-                CapabilityEnum::L1(..)
-            ));
-            assert!(matches!(
-                root_cpool_inner.unsafe_data[5].borrow().capability_data,
-                CapabilityEnum::EmptyCap
-            ));
+        let l4 = StoredCap::pml4_retype_from(&mut untyped, &mut cpool).unwrap();
+        let raw_page =
+            StoredCap::base_page_retype_from::<[u8; 10]>(&mut untyped, &mut cpool).unwrap();
+        let mut l4_0 = l4.0.as_l4_mut().unwrap();
+        l4_0.l4_map(
+            0u64.into(),
+            &raw_page.0,
+            &mut untyped,
+            &mut cpool,
+            MapPermissions::WRITE,
+        )
+        .unwrap();
 
-            let raw_page2 =
-                StoredCap::large_page_retype_from::<[u8; 10]>(untyped, &mut root_cpool).unwrap();
+        // We need 5 caps until now: l4, raw, l3, l2, l1
+        assert!(matches!(
+            root_cpool_inner.unsafe_data[4].borrow().capability_data,
+            CapabilityEnum::L1(..)
+        ));
+        assert!(matches!(
+            root_cpool_inner.unsafe_data[5].borrow().capability_data,
+            CapabilityEnum::EmptyCap
+        ));
 
-            let _fail_map =
-                l4.0.l4_map(
-                    0x1000u64.into(),
-                    &raw_page2.0,
-                    untyped,
-                    &mut root_cpool,
-                    MapPermissions::WRITE,
-                )
-                .unwrap_err();
-            assert_matches!(CapabilityErrors::MemoryAlignmentFailure, _fail_map);
+        let raw_page2 =
+            StoredCap::large_page_retype_from::<[u8; 10]>(&mut untyped, &mut cpool).unwrap();
 
-            let _fail_map =
-                l4.0.l4_map(
-                    0x0u64.into(),
-                    &raw_page2.0,
-                    untyped,
-                    &mut root_cpool,
-                    MapPermissions::WRITE,
-                )
-                .unwrap_err();
-            assert_matches!(CapabilityErrors::MemoryAlreadyMapped, _fail_map);
-
-            l4.0.l4_map(
-                0x20_0000u64.into(),
+        let _fail_map = l4_0
+            .l4_map(
+                0x1000u64.into(),
                 &raw_page2.0,
-                untyped,
-                &mut root_cpool,
+                &mut untyped,
+                &mut cpool,
                 MapPermissions::WRITE,
             )
-            .unwrap();
+            .unwrap_err();
+        assert_matches!(CapabilityErrors::MemoryAlignmentFailure, _fail_map);
 
-            // We need 6 caps until now: l4, raw, l3, l2, l1, raw2
-            assert_matches!(
-                root_cpool_inner.unsafe_data[5].borrow().capability_data,
-                CapabilityEnum::LargePage(..)
-            );
-            assert!(matches!(
-                root_cpool_inner.unsafe_data[6].borrow().capability_data,
-                CapabilityEnum::EmptyCap
-            ));
-        }
+        let _fail_map = l4_0
+            .l4_map(
+                0x0u64.into(),
+                &raw_page2.0,
+                &mut untyped,
+                &mut cpool,
+                MapPermissions::WRITE,
+            )
+            .unwrap_err();
+        assert_matches!(CapabilityErrors::MemoryAlreadyMapped, _fail_map);
+
+        l4_0.l4_map(
+            0x20_0000u64.into(),
+            &raw_page2.0,
+            &mut untyped,
+            &mut cpool,
+            MapPermissions::WRITE,
+        )
+        .unwrap();
+
+        // We need 6 caps until now: l4, raw, l3, l2, l1, raw2
+        assert_matches!(
+            root_cpool_inner.unsafe_data[5].borrow().capability_data,
+            CapabilityEnum::LargePage(..)
+        );
+        assert!(matches!(
+            root_cpool_inner.unsafe_data[6].borrow().capability_data,
+            CapabilityEnum::EmptyCap
+        ));
     }
 }

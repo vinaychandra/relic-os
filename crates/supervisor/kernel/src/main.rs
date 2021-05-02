@@ -15,6 +15,7 @@
 #![feature(maybe_uninit_extra)]
 #![feature(naked_functions)]
 #![feature(option_get_or_insert_default)]
+#![feature(result_flattening)]
 #![feature(thread_local)]
 #![feature(trace_macros)]
 #![feature(type_ascription)]
@@ -24,8 +25,8 @@ use crate::{
     addr::{PAddrGlobal, VAddr},
     arch::globals::{self, BASE_PAGE_LENGTH},
     capability::{
-        Capability, CapabilityEnum, Cpool, CpoolInner, MapPermissions, Scheduler, StoredCap,
-        UntypedMemory,
+        CapAccessorMut, Capability, CapabilityEnum, Cpool, CpoolInner, MapPermissions, Scheduler,
+        StoredCap, UntypedMemory,
     },
     logging::UnifiedLogger,
     ramdisk::{elf_loader::DefaultElfLoader, ustar::UStarArchive},
@@ -159,29 +160,23 @@ pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
     let root_cpool_refcell = RefCell::new(cpool_cap);
     let root_cpool_stored: StoredCap = (&root_cpool_refcell).into();
 
-    let (task_cap, _pml4) = root_cpool_stored
-        .cpool_create_mut(|mut root_cpool| {
-            let untyped = root_cpool.lookup((largest_index as u8).into()).unwrap();
-
-            Ok(load_sigma(
-                root_cpool_stored.clone(),
-                &mut root_cpool,
-                untyped,
-                bootstrap_info,
-            ))
-        })
-        .unwrap();
+    let root_cpool = root_cpool_stored.as_cpool_mut().unwrap();
+    let untyped = root_cpool.lookup((largest_index as u8).into()).unwrap();
+    let (task_cap, _pml4) = load_sigma(
+        root_cpool,
+        untyped.as_untyped_memory_mut().unwrap(),
+        bootstrap_info,
+    );
 
     let scheduler = Scheduler::new();
-    scheduler.add_task_with_priority(task_cap);
+    scheduler.add_task_with_priority(&mut task_cap.as_task_mut().unwrap());
     scheduler.run_forever()
 }
 
 // Return task, pml4
 fn load_sigma(
-    cpool_stored: StoredCap,
-    cpool_cap: &mut Cpool,
-    untyped_cap: StoredCap,
+    cpool_cap: CapAccessorMut<'_, Cpool>,
+    untyped_cap: CapAccessorMut<'_, UntypedMemory>,
     mut bootstrap_info: BootstrapInfo,
 ) -> (StoredCap, StoredCap) {
     let ramdisk: UStarArchive;
@@ -198,37 +193,29 @@ fn load_sigma(
             binary
         }
     };
-    let mut loader = DefaultElfLoader::new(
-        VAddr::new(0),
-        cpool_cap,
-        &mut bootstrap_info,
-        untyped_cap.clone(),
-    );
+    let mut loader =
+        DefaultElfLoader::new(VAddr::new(0), cpool_cap, &mut bootstrap_info, untyped_cap);
     binary.load(&mut loader).expect("Binary loading failed");
     let loc: u64 = loader.exe_section_location().into();
     info!(target: "load_sigma",
             "Sigma project loaded. Use comand `add-symbol-file ../../x86_64-relic-user/debug/relic-sigma  0x{:x}`",
             loc);
-    let pml4 = loader.pml4().clone();
-    core::mem::drop(loader);
+    let (mut untyped_cap, mut cpool_cap, pml4_cap_stored) = loader.unwrap();
+    let mut pml4_cap = pml4_cap_stored.as_l4_mut().unwrap();
+    let pml4 = pml4_cap.cap().clone();
 
     info!(target: "load_sigma", "Loading kernel stack");
     let user_stack_start: u64 = 0x6FFF_000_0000;
     let num_pages = 10usize;
-    untyped_cap
-        .untyped_memory_create_mut(|untyped| {
-            for page_index in 0..num_pages {
-                DefaultElfLoader::map_empty_page(
-                    &pml4,
-                    untyped,
-                    cpool_cap,
-                    VAddr::new(user_stack_start + (BASE_PAGE_LENGTH * page_index) as u64),
-                    MapPermissions::WRITE,
-                )
-            }
-            Ok(())
-        })
-        .unwrap();
+    for page_index in 0..num_pages {
+        DefaultElfLoader::map_empty_page(
+            &mut pml4_cap,
+            &mut untyped_cap,
+            &mut cpool_cap,
+            VAddr::new(user_stack_start + (BASE_PAGE_LENGTH * page_index) as u64),
+            MapPermissions::WRITE,
+        )
+    }
     let user_stack_end: VAddr = align::align_down(
         user_stack_start + num_pages as u64 * BASE_PAGE_LENGTH as u64 - 1,
         globals::STACK_ALIGN as u64,
@@ -238,58 +225,46 @@ fn load_sigma(
 
     info!(target: "load_sigma", "Loading TaskBuffers");
     let buffer_start: u64 = 0x6000_000_0000;
-    let (buffer_cap, ind) = untyped_cap
-        .untyped_memory_create_mut(|untyped| {
-            StoredCap::base_page_retype_from::<TaskBuffer>(untyped, cpool_cap)
-        })
-        .unwrap();
+    let (buffer_cap, ind) =
+        StoredCap::base_page_retype_from::<TaskBuffer>(&mut untyped_cap, &mut cpool_cap).unwrap();
     info!(target: "load_sigma", "TaskBufferCap is stored at index {}", ind);
-    untyped_cap
-        .untyped_memory_create_mut(|untyped| {
-            pml4.l4_map(
-                buffer_start.into(),
-                &buffer_cap,
-                untyped,
-                cpool_cap,
-                MapPermissions::WRITE,
-            )
-        })
+    pml4_cap
+        .l4_map(
+            buffer_start.into(),
+            &buffer_cap,
+            &mut untyped_cap,
+            &mut cpool_cap,
+            MapPermissions::WRITE,
+        )
         .unwrap();
 
-    buffer_cap
-        .base_page_create_mut(|buffer| {
-            buffer.page_data_mut::<TaskBuffer>().self_address = buffer_start;
+    let mut buffer = buffer_cap.as_base_page_mut().unwrap();
+    buffer.page_data_mut::<TaskBuffer>().self_address = buffer_start;
 
-            // Load bootstrap info into payload
-            buffer
-                .page_data_mut::<TaskBuffer>()
-                .write_to_task_buffer(&bootstrap_info)
-                .unwrap();
-
-            Ok(())
-        })
+    // Load bootstrap info into payload
+    buffer
+        .page_data_mut::<TaskBuffer>()
+        .write_to_task_buffer(&bootstrap_info)
         .unwrap();
 
-    let (task_cap, _task_cap_index) = untyped_cap
-        .untyped_memory_create_mut(|untyped| StoredCap::task_retype_from(untyped, cpool_cap, 15))
-        .unwrap();
+    let (task_cap, _task_cap_index) =
+        StoredCap::task_retype_from(&mut untyped_cap, &mut cpool_cap, 15).unwrap();
+    let mut task_cap_write = task_cap.as_task_mut().unwrap();
 
-    task_cap
-        .task_create_mut(|task_cap_write| {
-            task_cap_write.set_instruction_pointer(binary.entry_point().into());
-            task_cap_write.set_stack_pointer(user_stack_end);
-            task_cap_write.set_status(capability::TaskStatus::Inactive);
+    task_cap_write.set_instruction_pointer(binary.entry_point().into());
+    task_cap_write.set_stack_pointer(user_stack_end);
+    task_cap_write.set_status(capability::TaskStatus::Inactive);
 
-            task_cap_write.set_tcb_location(buffer_start.into());
-            Ok(())
-        })
+    task_cap_write.set_tcb_location(buffer_start.into());
+
+    task_cap_write.task_set_cpool(&mut cpool_cap).unwrap();
+    task_cap_write
+        .task_set_top_level_table(&mut pml4_cap)
         .unwrap();
-    task_cap
-        .task_set_cpool(cpool_stored, Some(cpool_cap))
-        .unwrap();
-    task_cap.task_set_top_level_table(pml4.clone()).unwrap();
-    task_cap.task_set_task_buffer(buffer_cap).unwrap();
+    task_cap_write.task_set_task_buffer(&mut buffer).unwrap();
 
     info!(target: "load_sigma", "Sigma task Cap: {:?}", task_cap);
+
+    core::mem::drop(task_cap_write);
     (task_cap, pml4)
 }
