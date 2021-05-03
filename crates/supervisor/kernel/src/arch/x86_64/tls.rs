@@ -12,18 +12,20 @@ use crate::{
     util::memory_region::MemoryRegion,
 };
 use heapless::Vec;
+use relic_utils::align;
 
 extern "C" {
     static mut __tdata_start: usize;
     static mut __tdata_end: usize;
     static mut __tbss_start: usize;
     static mut __tbss_end: usize;
+    static mut __tbss_align: usize;
 }
 
 /// Initialize CPU local store for kernel.
 /// This can be called per-CPU for TLS data for the core.
 pub fn initialize_tls(free_regions: &mut Vec<MemoryRegion, heapless::consts::U32>) {
-    let total_size;
+    let mut total_size;
 
     let allocate_data = |size: usize, align: usize| {
         for region in free_regions {
@@ -47,7 +49,8 @@ pub fn initialize_tls(free_regions: &mut Vec<MemoryRegion, heapless::consts::U32
             &__tdata_end as *const usize as usize - &__tdata_start as *const usize as usize;
         total_size = &__tbss_end as *const usize as usize - &__tdata_start as *const usize as usize;
 
-        let start_paddr = allocate_data(total_size + 8, 2);
+        total_size = align::align_up(total_size, &__tbss_align as *const _ as usize);
+        let start_paddr = allocate_data(total_size + 8, &__tbss_align as *const _ as usize);
         let start_vaddr = paddr_to_vaddr(start_paddr);
 
         load_tls_data(

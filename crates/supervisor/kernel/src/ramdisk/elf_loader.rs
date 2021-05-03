@@ -1,18 +1,13 @@
 //! The default ELF loader for the kernel.
 
-use std::any::Any;
-
 use elfloader::{ElfLoader, Flags, LoadableHeaders, Rela, TypeRela64, P64};
-use relic_abi::{bootstrap::BootstrapInfo, cap::CapabilityErrors, SetDefault};
+use relic_abi::{bootstrap::BootstrapInfo, cap::CapabilityErrors};
 use relic_utils::align;
 
 use crate::{
     addr::VAddr,
-    arch::{
-        capability::{paging::PageCap, TopPageTableCap},
-        globals,
-    },
-    capability::{CPoolCap, MapPermissions, RawPageCap, UntypedCap},
+    arch::{capability::paging::L4, globals},
+    capability::*,
 };
 
 /// Default ELF loader class for the sigma space.
@@ -20,13 +15,12 @@ use crate::{
 pub struct DefaultElfLoader<'a> {
     vbase: VAddr,
     #[getset(get = "pub", get_mut = "pub")]
-    cpool: &'a mut CPoolCap,
+    cpool: CapAccessorMut<'a, Cpool>,
     #[getset(get = "pub", get_mut = "pub")]
-    untyped: &'a mut UntypedCap,
+    untyped: CapAccessorMut<'a, UntypedMemory>,
 
     /// Get the root page table capability.
-    #[getset(get = "pub", get_mut = "pub")]
-    pml4: TopPageTableCap,
+    pml4: StoredCap,
 
     /// Contains the last executable region's virtual address.
     #[getset(get_copy = "pub")]
@@ -34,64 +28,75 @@ pub struct DefaultElfLoader<'a> {
 }
 
 impl<'a> DefaultElfLoader<'a> {
+    pub fn unwrap(
+        self,
+    ) -> (
+        CapAccessorMut<'a, UntypedMemory>,
+        CapAccessorMut<'a, Cpool>,
+        StoredCap,
+    ) {
+        (self.untyped, self.cpool, self.pml4)
+    }
+
     pub fn new(
         vbase: VAddr,
-        cpool: &'a mut CPoolCap,
+        mut cpool: CapAccessorMut<'a, Cpool>,
         bootstrap_info: &mut BootstrapInfo,
-        untyped: &'a mut UntypedCap,
+        mut untyped: CapAccessorMut<'a, UntypedMemory>,
     ) -> DefaultElfLoader<'a> {
-        let pml4 = TopPageTableCap::retype_from(&mut untyped.write()).unwrap();
-        let loc = cpool.read().downgrade_free(pml4.clone()).unwrap() as u8;
-        bootstrap_info.top_level_pml4 = loc.into();
+        let pml4 = StoredCap::pml4_retype_from(&mut untyped, &mut cpool).unwrap();
+        bootstrap_info.top_level_pml4 = (pml4.1 as u8).into();
 
         DefaultElfLoader {
             vbase,
             exe_section_location: 1u64.into(),
             cpool,
             untyped,
-            pml4,
+            pml4: pml4.0,
         }
     }
 
-    pub fn map_empty_page(&mut self, page_start_addr: VAddr, permissions: MapPermissions) {
-        let page_cap = RawPageCap::retype_from(&mut self.untyped.write()).unwrap();
-        self.cpool.read().downgrade_free(page_cap.clone()).unwrap();
-        self.pml4
-            .map(
-                page_start_addr,
-                &page_cap,
-                &mut self.untyped.write(),
-                &mut self.cpool.write(),
-                permissions,
-            )
-            .unwrap();
+    pub fn map_empty_page(
+        pml4: &mut CapAccessorMut<'_, L4>,
+        untyped: &mut CapAccessorMut<'_, UntypedMemory>,
+        cpool: &mut CapAccessorMut<'_, Cpool>,
+        page_start_addr: VAddr,
+        permissions: MapPermissions,
+    ) {
+        let page_cap =
+            StoredCap::base_page_retype_from::<[u8; 4096]>(untyped, cpool, true).unwrap();
+        pml4.l4_map(
+            page_start_addr,
+            &page_cap.0,
+            untyped,
+            cpool,
+            None,
+            permissions,
+        )
+        .unwrap();
+        let mut page_raw = page_cap.0.as_base_page_mut().unwrap();
 
-        let mut page = page_cap.write();
-        let page_length = page.length();
-        let page_raw = page.write();
-        for i in 0..page_length {
-            page_raw.0[i] = 0;
+        let data = page_raw.page_data_mut_raw();
+        for i in 0..data.len() {
+            data[i] = 0;
         }
     }
 
     /// Map a capability at the target address.
-    pub fn map_cap<T: SetDefault + Any + core::fmt::Debug>(
+    pub fn map_cap(
         &mut self,
-        cap: &PageCap<T>,
+        cap: &StoredCap,
         vaddr: VAddr,
         perms: MapPermissions,
     ) -> Result<(), CapabilityErrors> {
-        self.pml4.map(
+        self.pml4.as_l4_mut().unwrap().l4_map(
             vaddr,
             cap,
-            &mut self.untyped.write(),
-            &mut self.cpool.write(),
+            &mut self.untyped,
+            &mut self.cpool,
+            None,
             perms,
         )
-    }
-
-    pub fn unwrap(self) -> TopPageTableCap {
-        self.pml4
     }
 }
 
@@ -119,7 +124,7 @@ impl<'a> ElfLoader for DefaultElfLoader<'a> {
                 align::align_down(virt_addr_to_load_at, globals::BASE_PAGE_LENGTH);
 
             // We load only Ring 3 ELFs. So, add Ring3 permissions as well.
-            let mut target_permissions = MapPermissions::READ;
+            let mut target_permissions = MapPermissions::empty();
             let perms = header.flags();
             if perms.is_write() {
                 target_permissions |= MapPermissions::WRITE;
@@ -137,8 +142,12 @@ impl<'a> ElfLoader for DefaultElfLoader<'a> {
             let total_size = end_vaddr_to_load_at_aligned - virt_addr_to_load_at_page_aligned;
             let virt_addr_to_load_at_page_aligned_vaddr: VAddr =
                 virt_addr_to_load_at_page_aligned.into();
+
             for page_count in 0..(total_size / globals::BASE_PAGE_LENGTH) {
-                self.map_empty_page(
+                Self::map_empty_page(
+                    &mut self.pml4.as_l4_mut().unwrap(),
+                    &mut self.untyped,
+                    &mut self.cpool,
                     virt_addr_to_load_at_page_aligned_vaddr
                         + page_count * globals::BASE_PAGE_LENGTH,
                     target_permissions,
@@ -167,15 +176,16 @@ impl<'a> ElfLoader for DefaultElfLoader<'a> {
             self.exe_section_location = start.into();
         }
 
-        let pml4_lock = self.pml4.read();
-        let pml4 = pml4_lock.read();
-        info!(target:"elf", "load region into = {:#x} -- {:#x} (Size: {:#x}), Start PAddr: {:?}", start, end, end - start, start.translate(pml4));
+        let pml4 = &self.pml4.as_l4().unwrap().page_data;
+        info!(
+                target:"elf", "load region into = {:#x} -- {:#x} (Size: {:#x}), Start PAddr: {:?}",
+                start, end, end - start, start.translate(pml4));
 
         for i in 0..end - start {
             // Because we load everything in a target mapper rather than the current one, we use the mapper provided
             // for getting target locations.
             // TODO: Reduce virt_to_phys calls.
-            let result = (start + i).translate(pml4);
+            let result = (start + i).translate(&pml4);
             let target_physical_addr = match result {
                 Some(a) => a,
                 None => panic!("Unable to translate virtual address {:x}", (start + i)),
@@ -192,12 +202,14 @@ impl<'a> ElfLoader for DefaultElfLoader<'a> {
     /// within the loaded ELF file.
     fn relocate(&mut self, entry: &Rela<P64>) -> Result<(), &'static str> {
         let elf_entry_type = TypeRela64::from(entry.get_type());
-        let pml4_lock = self.pml4.read();
-        let pml4 = pml4_lock.read();
 
-        let target_vaddr = self.vbase + entry.get_offset();
-        let target_paddr = target_vaddr.translate(pml4).expect("Unable to translate");
-        let vaddr_in_current = target_paddr.to_paddr_global();
+        let (target_vaddr, vaddr_in_current) = {
+            let pml4 = &self.pml4.as_l4().unwrap().page_data;
+            let target_vaddr = self.vbase + entry.get_offset();
+            let target_paddr = target_vaddr.translate(pml4).expect("Unable to translate");
+            let vaddr_in_current = target_paddr.to_paddr_global();
+            (target_vaddr, vaddr_in_current)
+        };
 
         // https://www.intezer.com/blog/elf/executable-and-linkable-format-101-part-3-relocations/
         match elf_entry_type {

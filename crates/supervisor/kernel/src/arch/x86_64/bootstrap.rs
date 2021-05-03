@@ -103,8 +103,10 @@ fn initialize_bootstrap_core2() -> ! {
         // The location where all of memory is mapped to.
         // 0xFFFF_FF00_0000_0000 (entry 510 in P4)
         for i in 0..512usize {
-            let pdpt_flags =
-                PDPTEntry::PDPT_P | PDPTEntry::PDPT_RW | PDPTEntry::PDPT_G | PDPTEntry::PDPT_PS;
+            let pdpt_flags = PDPTEntry::PRESENT
+                | PDPTEntry::READ_WRITE
+                | PDPTEntry::GLOBAL
+                | PDPTEntry::HUGE_PAGE;
             let paddr = PAddr::new(i as u64 * 1024 * 1024 * 1024);
             let pdpt_entry = PDPTEntry::new(paddr, pdpt_flags);
 
@@ -114,7 +116,7 @@ fn initialize_bootstrap_core2() -> ! {
         let target_vaddr = unsafe { &MEM_MAP_STACK.0 as *const [PDPTEntry] as *const u8 as u64 };
         let target_paddr_in_global =
             identity_translate(current_page_table, VAddr::new(target_vaddr));
-        let pml4_flags = PML4Entry::PML4_P | PML4Entry::PML4_RW;
+        let pml4_flags = PML4Entry::PRESENT | PML4Entry::READ_WRITE;
         let new_pml4_entry = PML4Entry::new(target_paddr_in_global, pml4_flags);
         current_page_table[510] = new_pml4_entry;
 
@@ -183,7 +185,8 @@ fn initialize_bootstrap_core2() -> ! {
             let allocate_addr = allocate_stack(&mut free_regions);
             for page in 0..globals::KERNEL_STACK_NUM_PAGES {
                 let pd_index = (globals::KERNEL_STACK_NUM_PAGES + 1) * i + page;
-                let pd_flags = PDEntry::PD_P | PDEntry::PD_G | PDEntry::PD_PS | PDEntry::PD_RW;
+                let pd_flags =
+                    PDEntry::PRESENT | PDEntry::GLOBAL | PDEntry::LARGE_PAGE | PDEntry::READ_WRITE;
                 let pd_entry = PDEntry::new(allocate_addr + (page * 2 * 1024 * 1024), pd_flags);
                 unsafe { KERNEL_STACK_PD_ENTRIES.0[pd_index] = pd_entry };
             }
@@ -193,7 +196,7 @@ fn initialize_bootstrap_core2() -> ! {
             unsafe { &KERNEL_STACK_PD_ENTRIES.0 as *const [PDEntry] as *const u8 as u64 };
         let vadd: VAddr = pd_entries_vaddr.into();
         let pd_entries_paddr = vadd.translate(current_page_table).unwrap();
-        let pdpt_flags = PDPTEntry::PDPT_P | PDPTEntry::PDPT_G | PDPTEntry::PDPT_RW;
+        let pdpt_flags = PDPTEntry::PRESENT | PDPTEntry::GLOBAL | PDPTEntry::READ_WRITE;
         let pdpt_entry = PDPTEntry::new(pd_entries_paddr, pdpt_flags);
         l3[p3_index] = pdpt_entry;
 

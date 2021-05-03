@@ -1,30 +1,49 @@
-use std::sync::atomic::AtomicU64;
+/*!
+Task capability support.
+
+Support for kernel threads.
+*/
+use core::ops::Deref;
+use std::{cell::RefCell, ops::DerefMut, sync::atomic::AtomicU64};
+
+use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
 
 use crate::{
     addr::VAddr,
-    arch::{capability::TopPageTableCap, task::registers::Registers},
-    capability::{CPoolCap, TaskBufferPageCap, UntypedDescriptor},
-    util::managed_arc::{ManagedArc, ManagedArcAny, ManagedWeakPool3Arc},
+    arch::{capability::paging::L4, task::registers::Registers},
+    capability::{
+        BasePage, CapAccessorMut, Capability, CapabilityEnum, Cpool, StoredCap, UntypedMemory,
+    },
+    util::boxed::Boxed,
 };
-use crossbeam_utils::atomic::AtomicCell;
-use relic_abi::{cap::CapabilityErrors, syscall::SystemCall};
-use spin::RwLock;
 
-/// Represent a task status.
+/**
+Represent a task status.
+*/
 #[derive(Debug, Clone)]
 pub enum TaskStatus {
-    /// The task is running.
+    /**
+    The task is running.
+    */
     Active,
-    /// The task has never been started before.
+    /**
+    The task has never been started before.
+    */
     Inactive,
 
-    /// The task has made a syscall and is now waiting for response.
+    /**
+    The task has made a syscall and is now waiting for response.
+    */
     SyscalledAndWaiting(Option<SystemCall>),
-    /// The task has made a syscall and is response is ready.
-    /// Can optionally return upto two values.
+    /**
+    The task has made a syscall and is response is ready.
+    Can optionally return upto two values.
+    */
     SyscalledReadyToResume(CapabilityErrors, u64, u64),
 
-    /// Unknown task state.
+    /**
+    Unknown task state.
+    */
     Unknown,
 }
 
@@ -34,82 +53,150 @@ impl Default for TaskStatus {
     }
 }
 
-/// Task capability. Reference-counted smart pointer to task
-/// descriptor.
-///
-/// Tasks represents isolated processes running.
-pub type TaskCap = ManagedArc<RwLock<TaskDescriptor>>;
+#[derive(Debug)]
+pub struct Task {
+    descriptor: Boxed<TaskDescriptor>,
+    pub next_task_item: Option<StoredCap>,
+    pub prev_task_item: Option<StoredCap>,
+}
 
-impl TaskCap {
-    /// Create a task capability from an untyped capability.
-    pub fn retype_from(
-        untyped: &mut UntypedDescriptor,
-        priority: u8,
-    ) -> Result<Self, CapabilityErrors> {
-        let mut arc: Option<Self> = None;
+impl Deref for Task {
+    type Target = TaskDescriptor;
 
-        let weak_pool = unsafe {
-            ManagedWeakPool3Arc::create(untyped.allocate(
-                ManagedWeakPool3Arc::inner_type_length(),
-                ManagedWeakPool3Arc::inner_type_alignment(),
-            )?)
-        };
-
-        unsafe {
-            untyped.derive(
-                Self::inner_type_length(),
-                Self::inner_type_alignment(),
-                |paddr, next_child| {
-                    arc = Some(Self::new(
-                        paddr,
-                        RwLock::new(TaskDescriptor {
-                            weak_pool,
-                            priority,
-                            task_id: TASK_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
-                            runtime: Registers::default(),
-                            next: next_child,
-                            next_task: None,
-                            status: TaskStatus::Inactive,
-                        }),
-                    ));
-
-                    arc.clone().unwrap()
-                },
-            )?
-        };
-
-        Ok(arc.unwrap())
+    fn deref(&self) -> &Self::Target {
+        &self.descriptor
     }
 }
 
-/// Task descriptor.
-#[derive(Debug)]
+impl DerefMut for Task {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.descriptor
+    }
+}
+
+#[derive(Debug, Getters, Setters)]
 pub struct TaskDescriptor {
-    /// Contains 3 weak pointers
-    /// 0: CPool, 1: PML4, 2: TaskBuffer
-    weak_pool: ManagedWeakPool3Arc,
+    #[getset(get = "pub")]
+    cpool: Option<StoredCap>,
+    top_level_table: Option<StoredCap>,
+    #[getset(get = "pub")]
+    task_buffer: Option<StoredCap>,
 
     /// Register state for the thread. Only valid
     /// when thread is not running.
+    #[getset(get, set)]
     runtime: Registers,
 
-    /// Next item in the memory tree.
-    next: Option<ManagedArcAny>,
-
-    /// Next task in the task list.
-    next_task: Option<TaskCap>,
-
+    #[getset(get = "pub", set = "pub")]
     status: TaskStatus,
 
-    /// Priority of the task. Higher numbers are better priority.
+    #[getset(get = "pub", set = "pub")]
     priority: u8,
 
-    /// ID for the task.
     task_id: u64,
 }
 
-/// Simple task id generator.
-static TASK_ID: AtomicU64 = AtomicU64::new(0);
+static TASK_ID: AtomicU64 = AtomicU64::new(1);
+
+impl StoredCap {
+    pub fn task_retype_from(
+        untyped: &mut UntypedMemory,
+        cpool_to_store_in: &mut Cpool,
+        priority: u8,
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
+        let mut result_index = 0;
+
+        let location = untyped.derive(None, false, |task_desc| {
+            unsafe {
+                core::ptr::write(
+                    task_desc,
+                    TaskDescriptor {
+                        task_id: TASK_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed),
+                        priority,
+                        status: TaskStatus::Inactive,
+                        runtime: Registers::default(),
+                        cpool: None,
+                        top_level_table: None,
+                        task_buffer: None,
+                    },
+                )
+            };
+
+            let boxed = unsafe { Boxed::new((task_desc as u64).into()) };
+            let cpool_location_to_store = cpool_to_store_in.get_free_index()?;
+
+            let location = cpool_to_store_in.write_to_if_empty(
+                cpool_location_to_store,
+                Capability {
+                    capability_data: CapabilityEnum::Task(Task {
+                        descriptor: boxed,
+                        next_task_item: None,
+                        prev_task_item: None,
+                    }),
+                    ..Default::default()
+                },
+            )?;
+
+            result_index = cpool_location_to_store;
+            Ok(location)
+        })?;
+
+        Ok((location, result_index))
+    }
+}
+
+impl CapAccessorMut<'_, Task> {
+    pub fn task_set_cpool(
+        &mut self,
+        cap: &mut CapAccessorMut<'_, Cpool>,
+    ) -> Result<(), CapabilityErrors> {
+        if self.cpool.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+        if cap.linked_task.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+
+        cap.linked_task = Some(self.cap().clone());
+        self.cpool = Some(cap.cap().clone());
+        Ok(())
+    }
+
+    pub fn task_set_top_level_table(
+        &mut self,
+        l4: &mut CapAccessorMut<'_, L4>,
+    ) -> Result<(), CapabilityErrors> {
+        if self.top_level_table.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+        if l4.linked_task.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+
+        l4.linked_task = Some(self.cap().clone());
+        self.top_level_table = Some(l4.cap().clone());
+
+        Ok(())
+    }
+
+    pub fn task_set_task_buffer(
+        &mut self,
+        task_buffer: &mut CapAccessorMut<'_, BasePage>,
+    ) -> Result<(), CapabilityErrors> {
+        if self.task_buffer.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+
+        if task_buffer.linked_task.is_some() {
+            Err(CapabilityErrors::CapabilityAlreadyOccupied)?
+        }
+
+        task_buffer.linked_task = Some(self.cap().clone());
+
+        self.task_buffer = Some(task_buffer.cap().clone());
+        Ok(())
+    }
+}
 
 impl TaskDescriptor {
     /// Set the task's instruction pointer.
@@ -120,57 +207,6 @@ impl TaskDescriptor {
     /// Set the task's stack pointer.
     pub fn set_stack_pointer(&mut self, stack_pointer: VAddr) {
         self.runtime.set_rsp(stack_pointer.into());
-    }
-
-    /// Set the task's root capability pool.
-    pub fn downgrade_cpool(&self, cpool: CPoolCap) {
-        self.weak_pool.downgrade_at(cpool, 0).unwrap()
-    }
-
-    /// Read from the task's root capability pool.
-    pub fn upgrade_cpool(&self) -> Option<CPoolCap> {
-        self.weak_pool.upgrade(0)
-    }
-
-    /// Set the task's top page table.
-    pub fn downgrade_top_page_table(&self, pml4: TopPageTableCap) {
-        self.weak_pool.downgrade_at(pml4, 1).unwrap()
-    }
-
-    /// Read from the task's top page table.
-    pub fn upgrade_top_page_table(&self) -> Option<TopPageTableCap> {
-        self.weak_pool.upgrade(1)
-    }
-
-    /// Set the task's buffer.
-    pub fn downgrade_buffer(&self, buffer: TaskBufferPageCap) {
-        self.weak_pool.downgrade_at(buffer, 2).unwrap()
-    }
-
-    /// Read from the task's buffer.
-    pub fn upgrade_buffer(&self) -> Option<TaskBufferPageCap> {
-        self.weak_pool.upgrade(2)
-    }
-
-    /// Current task status.
-    pub fn status(&self) -> TaskStatus {
-        self.status.clone()
-    }
-
-    /// Set the current task status.
-    pub fn set_status(&mut self, status: TaskStatus) {
-        self.status = status;
-    }
-
-    /// Get priority for the task.
-    pub fn get_priority(&self) -> u8 {
-        self.priority
-    }
-
-    /// Set a new priority for the task.
-    pub fn set_priority(&mut self, new_priority: u8) {
-        assert!(new_priority < 16);
-        self.priority = new_priority;
     }
 
     /// Set the tcb location for the task.
@@ -188,8 +224,13 @@ impl TaskDescriptor {
         let mut current_status = TaskStatus::Active;
         core::mem::swap(&mut self.status, &mut current_status);
 
-        if let Some(pml4) = self.upgrade_top_page_table() {
-            pml4.write().switch_to();
+        if let Some(pml4) = self.top_level_table.clone() {
+            let mut l4 = pml4
+                .as_l4_mut()
+                .expect("Task's top level page table is not PML4");
+            l4.switch_to();
+        } else {
+            panic!("Cannot start task without pml4");
         }
 
         let syscall_info = match current_status {
@@ -208,39 +249,59 @@ impl TaskDescriptor {
 /// Even indexed tasks are ready to run next. Odd indexed ones
 /// will be moved to even ones when all even ones are done.
 pub struct Scheduler {
-    current_list: [AtomicCell<Option<TaskCap>>; 32],
+    current_list: [RefCell<Capability>; 32],
 }
 
 impl Scheduler {
     pub const fn new() -> Self {
-        const NONE_VAL: AtomicCell<Option<TaskCap>> = AtomicCell::new(None);
-
+        const REFCELL_MARKER_TASK: RefCell<Capability> = RefCell::new(Capability {
+            capability_data: CapabilityEnum::Task(Task {
+                descriptor: unsafe { Boxed::new_unchecked(0xFFFF_FFFF_DEAD_DEAD) },
+                next_task_item: None,
+                prev_task_item: None,
+            }),
+            next_mem_item: None,
+            prev_mem_item: None,
+        });
         Self {
-            current_list: [NONE_VAL; 32],
+            current_list: [REFCELL_MARKER_TASK; 32],
         }
     }
 
     /// Add a task with the given priority.
-    pub fn add_task_with_priority(&self, cap: TaskCap) {
-        let mut cap_write = cap.write();
+    pub fn add_task_with_priority(&self, new_task: &mut CapAccessorMut<'_, Task>) {
+        let task_priority = new_task.priority as usize;
+        assert!(task_priority < 16);
 
-        let current_priority = cap_write.priority as usize;
-        assert!(current_priority < 16);
+        let current_list = &self.current_list[task_priority * 2 + 1];
+        new_task.prev_task_item = unsafe { Some(StoredCap::from_raw(current_list)) };
 
-        let latest = &self.current_list[current_priority * 2 + 1];
-        cap_write.next_task = latest.take();
+        let mut list_accessor = current_list.borrow_mut();
+        let to_be_second = list_accessor.get_next_task_item_mut().take();
+        *list_accessor.get_next_task_item_mut() = Some(new_task.cap().clone());
 
-        core::mem::drop(cap_write);
-        latest.store(Some(cap));
+        new_task.next_task_item = to_be_second.clone();
+        if let Some(to_be_second_val) = to_be_second {
+            *to_be_second_val
+                .as_ref()
+                .borrow_mut()
+                .get_prev_task_item_mut() = Some(new_task.cap().clone());
+        }
     }
 
     /// Get the next task to run.
-    pub fn get_task_to_run(&self) -> Option<TaskCap> {
+    pub fn get_task_to_run(&self) -> Option<StoredCap> {
         for i in (0..=15usize).rev() {
-            let mut current_queue_item = self.current_list[i * 2].take().take();
+            let mut current_queue_item = self.current_list[i * 2]
+                .borrow_mut()
+                .get_next_task_item_mut()
+                .take();
             if current_queue_item.is_none() {
-                // Data is available in the other list. Lets use that instead.
-                current_queue_item = self.current_list[i * 2 + 1].take().take();
+                // Data may available in the other list. Lets use that instead.
+                current_queue_item = self.current_list[i * 2 + 1]
+                    .borrow_mut()
+                    .get_next_task_item_mut()
+                    .take();
 
                 if current_queue_item.is_none() {
                     continue;
@@ -248,10 +309,17 @@ impl Scheduler {
             }
 
             if let Some(task_to_execute) = current_queue_item {
-                let mut task_to_execute_writer = task_to_execute.write();
-                let next_to_run = task_to_execute_writer.next_task.take();
+                let mut task_to_execute_writer = task_to_execute.as_task_mut().unwrap();
+                let to_be_first = task_to_execute_writer.next_task_item.take();
+                let cur = task_to_execute_writer.prev_task_item.take();
+                debug_assert!(cur.is_some(), "This must be the 'root' of priority");
+                if let Some(next) = to_be_first.clone() {
+                    next.as_task_mut().unwrap().prev_task_item = cur;
+                }
 
-                self.current_list[i * 2].store(next_to_run);
+                *self.current_list[i * 2]
+                    .borrow_mut()
+                    .get_next_task_item_mut() = to_be_first;
 
                 core::mem::drop(task_to_execute_writer);
                 return Some(task_to_execute);
@@ -265,22 +333,98 @@ impl Scheduler {
         loop {
             let task = self.get_task_to_run();
             if let Some(task_cap) = task {
-                let task_status = task_cap.read().status();
-                let result_status = match task_status {
-                    TaskStatus::Inactive => task_cap.write().switch_to(),
-                    TaskStatus::SyscalledReadyToResume(..) => task_cap.write().switch_to(),
-                    default => panic!("Cannot run a task in '{:?}' state", default),
+                let mut desc = task_cap.as_task_mut().unwrap();
+                let result_status = {
+                    let task_status = desc.status.clone();
+
+                    let result_status = match task_status {
+                        TaskStatus::Inactive => desc.switch_to(),
+                        TaskStatus::SyscalledReadyToResume(..) => desc.switch_to(),
+                        default => panic!("Cannot run a task in '{:?}' state", default),
+                    };
+                    result_status
                 };
 
                 match result_status {
                     TaskStatus::SyscalledAndWaiting(data) => {
-                        crate::syscall_processor::process_syscall(&task_cap, data, self)
+                        crate::syscall_processor::process_syscall(&mut desc, data, self)
                     }
                     default => panic!("Cannot result in this result state: {:?}", default),
                 };
             } else {
                 // Sleep
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem::MaybeUninit;
+
+    use crate::{addr::PAddrGlobal, capability::CpoolInner};
+
+    use super::*;
+
+    #[test]
+    fn test_scheduler() {
+        let raw_memory: Box<MaybeUninit<[u8; 0x20_0000 * 5]>> = Box::new_uninit();
+        let raw_addr = Box::into_raw(raw_memory) as u64;
+        let addr = PAddrGlobal::new(raw_addr);
+
+        let mut untyped_memory = unsafe { UntypedMemory::bootstrap(addr, 0x20_0000 * 5, false) };
+        const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
+        let root_cpool_inner = CpoolInner {
+            unsafe_data: [NONE_INNER; 256],
+        };
+        let mut root_cpool = Cpool {
+            linked_task: None,
+            data: unsafe {
+                Boxed::new(PAddrGlobal::new(
+                    &root_cpool_inner as *const CpoolInner as u64,
+                ))
+            },
+        };
+
+        if let CapabilityEnum::UntypedMemory(untyped) = &mut untyped_memory.capability_data {
+            let scheduler = Scheduler::new();
+
+            let task1 = StoredCap::task_retype_from(untyped, &mut root_cpool, 5).unwrap();
+            let mut task1_0 = task1.0.as_task_mut().unwrap();
+            assert!(task1_0.descriptor.task_id == 1);
+            task1_0.descriptor.priority = 5;
+
+            let task2 = StoredCap::task_retype_from(untyped, &mut root_cpool, 5).unwrap();
+            let mut task2_0 = task2.0.as_task_mut().unwrap();
+            assert!(task2_0.descriptor.task_id == 2);
+            task2_0.descriptor.priority = 5;
+
+            let task3 = StoredCap::task_retype_from(untyped, &mut root_cpool, 5).unwrap();
+            let mut task3_0 = task3.0.as_task_mut().unwrap();
+            assert!(task3_0.descriptor.task_id == 3);
+            task3_0.descriptor.priority = 10;
+
+            scheduler.add_task_with_priority(&mut task1_0);
+            scheduler.add_task_with_priority(&mut task3_0);
+            scheduler.add_task_with_priority(&mut task2_0);
+
+            let next_task = scheduler.get_task_to_run().unwrap();
+            let next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(3, next_task_val.descriptor.task_id);
+
+            let next_task = scheduler.get_task_to_run().unwrap();
+            let mut next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(2, next_task_val.descriptor.task_id);
+            scheduler.add_task_with_priority(&mut next_task_val);
+
+            let next_task = scheduler.get_task_to_run().unwrap();
+            let mut next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(1, next_task_val.descriptor.task_id);
+            scheduler.add_task_with_priority(&mut next_task_val);
+
+            let next_task = scheduler.get_task_to_run().unwrap();
+            let next_task_val = next_task.as_task_mut().unwrap();
+            assert_eq!(1, next_task_val.descriptor.task_id);
         }
     }
 }

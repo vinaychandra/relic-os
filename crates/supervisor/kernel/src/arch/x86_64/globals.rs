@@ -13,6 +13,7 @@ pub const STACK_ALIGN: usize = 128;
 
 /// The location where all of memory is mapped to.
 pub const MEM_MAP_OFFSET_LOCATION: u64 = 0xFFFF_FF00_0000_0000;
+pub const MEM_MAP_SIZE: u64 = 512 * 1024 * 1024 * 1024;
 
 /// Kernel uses 2 MiB pages. Number of pages for each kernel stack.
 pub const KERNEL_STACK_NUM_PAGES: usize = 2;
