@@ -13,9 +13,12 @@ pub fn get_free_space(cap: CAddr) -> Result<(usize, usize), CapabilityErrors> {
 }
 
 /// Retype untyped memory into a raw page and returns its CAddr.
-pub fn retype_raw_page(cap: CAddr) -> Result<CAddr, CapabilityErrors> {
+/// The value of size is the 'type' of page. This is architecture
+/// dependant. Example: 0 => 4KiB, 1 => 2MiB, 2 => 1GiB.
+pub fn retype_raw_page(cap: CAddr, size_type: u64) -> Result<CAddr, CapabilityErrors> {
     let syscall = SystemCall::RawPageRetype {
         untyped_memory: cap,
+        size: size_type,
     };
     raw_syscall::make_syscall(&syscall).map(|(a, _)| (a as u8).into())
 }

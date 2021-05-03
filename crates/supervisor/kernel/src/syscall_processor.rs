@@ -50,18 +50,33 @@ pub fn process_syscall(
             }
             return;
         }
-        SystemCall::RawPageRetype { untyped_memory } => {
+        SystemCall::RawPageRetype {
+            untyped_memory,
+            size,
+        } => {
             let result = || -> Result<(u64, u64), CapabilityErrors> {
                 let mut cpool = cpool_cap.as_cpool_mut()?;
                 let untyped_op = cpool
                     .lookup(untyped_memory)
                     .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
                 let mut untyped = untyped_op.as_untyped_memory_mut()?;
-                let raw_page_cap = StoredCap::base_page_retype_from::<[u8; 0x1000]>(
-                    &mut untyped,
-                    &mut cpool,
-                    true,
-                )?;
+                let raw_page_cap = match size {
+                    1 => StoredCap::large_page_retype_from::<[u8; 0x20_0000]>(
+                        &mut untyped,
+                        &mut cpool,
+                        true,
+                    )?,
+                    2 => StoredCap::huge_page_retype_from::<[u8; 0x4000_0000]>(
+                        &mut untyped,
+                        &mut cpool,
+                        true,
+                    )?,
+                    _ => StoredCap::base_page_retype_from::<[u8; 0x1000]>(
+                        &mut untyped,
+                        &mut cpool,
+                        true,
+                    )?,
+                };
                 Ok((raw_page_cap.1 as u64, 0u64))
             };
 

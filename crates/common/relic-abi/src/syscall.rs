@@ -80,8 +80,10 @@ pub enum SystemCall {
 
     /// Create a new raw page capability using the provided
     /// untyped memory and store the capability in the current cpool.
+    /// The value of size is the 'type' of page. This is architecture
+    /// dependant. Example: 0 => 4KiB, 1 => 2MiB, 2 => 1GiB.
     /// Returns the new CAddr.
-    RawPageRetype { untyped_memory: CAddr },
+    RawPageRetype { untyped_memory: CAddr, size: u64 },
     /// Map a given page into the provided address.
     RawPageMap {
         /// To map raw pages, we might need more pages for inner tables.
@@ -109,7 +111,10 @@ impl SystemCall {
             SystemCall::Yield => Ok((1, 0, 0, 0, 0)),
             SystemCall::Print => Ok((2, 0, 0, 0, 0)),
             SystemCall::UntypedTotalFree(a) => Ok((3, a.into_u64(), 0, 0, 0)),
-            SystemCall::RawPageRetype { untyped_memory: a } => Ok((100, a.into_u64(), 0, 0, 0)),
+            SystemCall::RawPageRetype {
+                untyped_memory: a,
+                size: b,
+            } => Ok((100, a.into_u64(), *b, 0, 0)),
             SystemCall::RawPageMap {
                 untyped_memory,
                 top_level_table,
@@ -135,6 +140,7 @@ impl SystemCall {
             3 => Ok(SystemCall::UntypedTotalFree(CAddr::from_u64(b))),
             100 => Ok(SystemCall::RawPageRetype {
                 untyped_memory: CAddr::from_u64(b),
+                size: c as u64,
             }),
             101 => Ok(SystemCall::RawPageMap {
                 untyped_memory: CAddr::from_u64(b),
