@@ -124,7 +124,7 @@ fn initialize_bootstrap_core2() -> ! {
         info!(target: "bootstrap", "Offset mapping complete");
     }
 
-    let mut free_regions: Vec<MemoryRegion, heapless::consts::U32> = Vec::new();
+    let mut free_regions: Vec<MemoryRegion, 32> = Vec::new();
     {
         let mem_map_entries = unsafe { crate::bootboot::bootboot.get_mmap_entries() };
         for entry in mem_map_entries {
@@ -163,7 +163,7 @@ fn initialize_bootstrap_core2() -> ! {
         assert!(!is_present);
 
         // Allocate new kernel stacks.
-        let allocate_stack = |free_regions: &mut Vec<MemoryRegion, heapless::consts::U32>| {
+        let allocate_stack = |free_regions: &mut Vec<MemoryRegion, 32>| {
             for region in free_regions {
                 let allocated = region.try_allocate(
                     globals::KERNEL_STACK_NUM_PAGES * 1024 * 1024 * 2, // 2MiB * num pagse
@@ -251,7 +251,7 @@ fn initialize_bootstrap_core2() -> ! {
     }
 }
 
-static mut FREE_REGIONS: Option<Vec<MemoryRegion, heapless::consts::U32>> = None;
+static mut FREE_REGIONS: Option<Vec<MemoryRegion, 32>> = None;
 
 extern "C" fn initialize_bootstrap_core3() -> ! {
     info!(target: "bootstrap", "CPU Core ready. Is BSP: true, Core ID: {}", super::cpu_locals::PROCESSOR_ID.get());

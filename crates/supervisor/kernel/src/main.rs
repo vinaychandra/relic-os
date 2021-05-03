@@ -120,7 +120,7 @@ fn _alloc_error_handler(layout: alloc::alloc::Layout) -> ! {
 
 /// Main Function on bootstrap processor.
 /// This function should not return.
-pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
+pub fn main_bsp(free_regions: Vec<MemoryRegion, 32>) -> ! {
     info!(target: "main", "Free regions found: {:?}", free_regions);
 
     let mut bootstrap_info = BootstrapInfo {

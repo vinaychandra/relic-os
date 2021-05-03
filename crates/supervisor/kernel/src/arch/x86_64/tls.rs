@@ -24,7 +24,7 @@ extern "C" {
 
 /// Initialize CPU local store for kernel.
 /// This can be called per-CPU for TLS data for the core.
-pub fn initialize_tls(free_regions: &mut Vec<MemoryRegion, heapless::consts::U32>) {
+pub fn initialize_tls(free_regions: &mut Vec<MemoryRegion, 32>) {
     let mut total_size;
 
     let allocate_data = |size: usize, align: usize| {
