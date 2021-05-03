@@ -27,7 +27,7 @@ macro_rules! raw_page_impl {
                     assert!(core::mem::align_of::<T>() <= $size);
                     let mut result_index = 0;
 
-                    let cap = untyped.derive(Some($size), |memory: *mut Inner<$size>| {
+                    let cap = untyped.derive(Some($size), true, |memory: *mut Inner<$size>| {
                         unsafe {
                             core::ptr::write_bytes(memory as *mut u8, 0, $size);
                         }

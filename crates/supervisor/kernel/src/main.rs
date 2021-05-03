@@ -49,6 +49,9 @@ extern crate relic_utils;
 extern crate bitflags;
 
 #[macro_use]
+extern crate bitfield;
+
+#[macro_use]
 extern crate getset;
 
 #[macro_use]
@@ -144,7 +147,11 @@ pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
             largest_index = index;
         }
         let untyped = unsafe {
-            UntypedMemory::bootstrap(region.start_paddr().to_paddr_global(), region.length())
+            UntypedMemory::bootstrap(
+                region.start_paddr().to_paddr_global(),
+                region.length(),
+                false,
+            )
         };
         root_cpool
             .write_to_if_empty(index, untyped)

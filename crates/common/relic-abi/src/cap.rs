@@ -25,6 +25,8 @@ pub enum CapabilityErrors {
     MemoryNotSufficient,
     /// Alignment for memory is unexpected.
     MemoryAlignmentFailure,
+    /// Some operation used device memory instead of normal memory.
+    DeviceMemoryConflict,
     /// The passed memory address is invalid.
     InvalidMemoryAddress,
 

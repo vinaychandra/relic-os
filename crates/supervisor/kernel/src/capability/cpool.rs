@@ -200,7 +200,7 @@ impl StoredCap {
 
         let mut result_index = 0;
 
-        let location = untyped_memory.derive(None, |memory: *mut CpoolInner| {
+        let location = untyped_memory.derive(None, false, |memory: *mut CpoolInner| {
             unsafe {
                 core::ptr::write(memory, NEW);
             }

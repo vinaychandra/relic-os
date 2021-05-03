@@ -11,6 +11,7 @@ relic-utils = { path = "../../common/relic-utils" }
 
 acpi = "2.0.0"
 bitflags = "1.2"
+bitfield = "0.13"
 getset = "0.1"
 heapless = "0.6"
 log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"] }

@@ -26,10 +26,10 @@ pub struct UntypedMemory {
     */
     start_paddr: PAddrGlobal,
     /**
-    The length of the physical memory owned by this capability.
+    The length of the physical memory owned by this capability
+    and more flags.
     */
-    #[getset(get_copy = "pub")]
-    length: usize,
+    untyped_flags_1: UntypedFlags1,
     /**
     The position in physical memory until which memory has been
     allocated. This is reset to `start_paddr` only when the
@@ -45,6 +45,17 @@ pub struct UntypedMemory {
     child_mem_item: Option<StoredCap>,
 }
 
+bitfield! {
+    /**
+    The length of physical memory and a flags denoting
+    if the untyped memory belongs to devices.
+    */
+    pub struct UntypedFlags1(u64);
+    impl Debug;
+    is_device_memory, set_is_device_memory: 63;
+    length, set_length: 62, 0;
+}
+
 impl UntypedMemory {
     /**
     Bootstrap an untyped capability using a memory region information.
@@ -52,10 +63,18 @@ impl UntypedMemory {
     # Safety
     Can only be used for free memory regions returned from bootstrap.
     */
-    pub unsafe fn bootstrap(start_paddr: PAddrGlobal, length: usize) -> Capability {
+    pub unsafe fn bootstrap(
+        start_paddr: PAddrGlobal,
+        length: usize,
+        is_device_memory: bool,
+    ) -> Capability {
+        let mut sw = UntypedFlags1(0);
+        sw.set_is_device_memory(is_device_memory);
+        sw.set_length(length as u64);
+
         let data = UntypedMemory {
             start_paddr,
-            length,
+            untyped_flags_1: sw,
             watermark: start_paddr,
             child_mem_item: None,
         };
@@ -69,7 +88,22 @@ impl UntypedMemory {
     Get free space in bytes.
     */
     pub fn get_free_space(&self) -> u64 {
-        self.start_paddr + self.length - self.watermark
+        self.start_paddr + self.untyped_flags_1.length() - self.watermark
+    }
+
+    /**
+    Get length of the untyped memory.
+    */
+    pub fn length(&self) -> u64 {
+        self.untyped_flags_1.length()
+    }
+
+    /**
+    Returns a flags describing whether this memory belongs to devices.
+    In such cases, this cannot be further allocated into non pages.
+     */
+    pub fn is_device_memory(&self) -> bool {
+        self.untyped_flags_1.is_device_memory()
     }
 
     /**
@@ -83,7 +117,7 @@ impl UntypedMemory {
         alignment: usize,
     ) -> Result<PAddrGlobal, CapabilityErrors> {
         let paddr: PAddrGlobal = align::align_up((self.watermark).into(), alignment).into();
-        if paddr + length > self.start_paddr + self.length {
+        if paddr + length > self.start_paddr + self.untyped_flags_1.length() {
             return Err(CapabilityErrors::MemoryNotSufficient);
         }
 
@@ -96,7 +130,7 @@ impl UntypedMemory {
     */
     pub fn can_allocate(&self, length: usize, alignment: usize) -> bool {
         let paddr: PAddrGlobal = align::align_up((self.watermark).into(), alignment).into();
-        paddr + length <= self.start_paddr + self.length
+        paddr + length <= self.start_paddr + self.untyped_flags_1.length()
     }
 
     /**
@@ -107,15 +141,23 @@ impl UntypedMemory {
     to store as the next item in the derivation tree.
     The alignment of the data created is taken from the alignment parameter.
     If None, the alignemnt is the same as that of type parameter `T`.
+
+    Only some types can derive a device memory. That is checked by setting
+    the `may_be_device` flags.
     */
     pub fn derive<T, F>(
         &mut self,
         alignment: Option<usize>,
+        may_be_device_memory: bool,
         f: F,
     ) -> Result<StoredCap, CapabilityErrors>
     where
         F: FnOnce(*mut T) -> Result<StoredCap, CapabilityErrors>,
     {
+        if !may_be_device_memory && self.is_device_memory() {
+            Err(CapabilityErrors::DeviceMemoryConflict)?;
+        }
+
         let length = core::mem::size_of::<T>();
         let alignment = if let Some(align_val) = alignment {
             align_val

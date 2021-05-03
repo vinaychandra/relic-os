@@ -106,7 +106,7 @@ impl StoredCap {
     ) -> Result<(StoredCap, usize), CapabilityErrors> {
         let mut result_index = 0;
 
-        let location = untyped.derive(None, |task_desc| {
+        let location = untyped.derive(None, false, |task_desc| {
             unsafe {
                 core::ptr::write(
                     task_desc,
@@ -372,7 +372,7 @@ mod tests {
         let raw_addr = Box::into_raw(raw_memory) as u64;
         let addr = PAddrGlobal::new(raw_addr);
 
-        let mut untyped_memory = unsafe { UntypedMemory::bootstrap(addr, 0x20_0000 * 5) };
+        let mut untyped_memory = unsafe { UntypedMemory::bootstrap(addr, 0x20_0000 * 5, false) };
         const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
         let root_cpool_inner = CpoolInner {
             unsafe_data: [NONE_INNER; 256],
