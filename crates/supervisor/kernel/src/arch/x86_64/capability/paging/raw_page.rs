@@ -22,15 +22,19 @@ macro_rules! raw_page_impl {
                 pub fn [<$name:snake _retype_from>]<T: 'static>(
                     untyped: &mut UntypedMemory,
                     cpool_to_store_in: &mut Cpool,
+                    zero_out: bool,
                 ) -> Result<(StoredCap, usize), CapabilityErrors> {
                     assert!(core::mem::size_of::<T>() <= $size);
                     assert!(core::mem::align_of::<T>() <= $size);
                     let mut result_index = 0;
 
                     let cap = untyped.derive(Some($size), true, |memory: *mut Inner<$size>| {
-                        unsafe {
-                            core::ptr::write_bytes(memory as *mut u8, 0, $size);
+                        if zero_out {
+                            unsafe {
+                                core::ptr::write_bytes(memory as *mut u8, 0, $size);
+                            }
                         }
+
                         let boxed = unsafe { Boxed::new((memory as u64).into()) };
 
                         let stored_index = cpool_to_store_in.get_free_index()?;

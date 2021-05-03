@@ -57,8 +57,11 @@ pub fn process_syscall(
                     .lookup(untyped_memory)
                     .ok_or(CapabilityErrors::CapabilitySearchFailed)?;
                 let mut untyped = untyped_op.as_untyped_memory_mut()?;
-                let raw_page_cap =
-                    StoredCap::base_page_retype_from::<[u8; 0x1000]>(&mut untyped, &mut cpool)?;
+                let raw_page_cap = StoredCap::base_page_retype_from::<[u8; 0x1000]>(
+                    &mut untyped,
+                    &mut cpool,
+                    true,
+                )?;
                 Ok((raw_page_cap.1 as u64, 0u64))
             };
 
@@ -96,7 +99,7 @@ pub fn process_syscall(
                 let perms = MapPermissions::WRITE | MapPermissions::EXECUTE;
 
                 let mut top_level_table_mut = top_level_table.as_l4_mut().unwrap();
-                top_level_table_mut.l4_map(vaddr, &raw_page, &mut untyped, &mut cpool, perms)
+                top_level_table_mut.l4_map(vaddr, &raw_page, &mut untyped, &mut cpool, None, perms)
             };
             let data = func().err().unwrap_or(CapabilityErrors::None);
             set_result_and_schedule(source_task, (data, 0, 0), scheduler);

@@ -316,5 +316,7 @@ bitflags! {
         /// Execute permissions for the page. In supported architectures,
         /// this page will be marked non executable if this flag is absent.
         const EXECUTE   = 0b0000_0100;
+        /// Disable caching for this page. Useful for device backed memory.
+        const CACHE_DISABLE = 0b0000_1000;
     }
 }

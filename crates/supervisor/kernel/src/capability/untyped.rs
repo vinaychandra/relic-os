@@ -110,19 +110,21 @@ impl UntypedMemory {
     Allocate a memory region using the given length and
     alignment. Shift the watermark of the current descriptor
     passing over the allocated region.
+    Returns the new address and old watermark.
     */
     pub fn allocate(
         &mut self,
         length: usize,
         alignment: usize,
-    ) -> Result<PAddrGlobal, CapabilityErrors> {
+    ) -> Result<(PAddrGlobal, PAddrGlobal), CapabilityErrors> {
         let paddr: PAddrGlobal = align::align_up((self.watermark).into(), alignment).into();
         if paddr + length > self.start_paddr + self.untyped_flags_1.length() {
             return Err(CapabilityErrors::MemoryNotSufficient);
         }
 
+        let oldwatermark = self.watermark;
         self.watermark = paddr + length;
-        Ok(paddr)
+        Ok((paddr, oldwatermark))
     }
 
     /**
@@ -166,21 +168,27 @@ impl UntypedMemory {
         };
         let paddr = self.allocate(length, alignment)?;
 
-        let f_success = f(unsafe { paddr.as_raw_ptr() })?;
+        let f_result = f(unsafe { paddr.0.as_raw_ptr() });
+        match f_result {
+            Ok(f_success) => {
+                let mut fs_write = f_success.borrow_mut();
 
-        {
-            let mut fs_write = f_success.borrow_mut();
+                let to_be_second = self.child_mem_item.take();
+                if let Some(ref sec) = to_be_second {
+                    let mut sec_write = sec.as_ptr();
+                    unsafe { (*sec_write).prev_mem_item = Some(f_success.clone()) };
+                }
 
-            let to_be_second = self.child_mem_item.take();
-            if let Some(ref sec) = to_be_second {
-                let mut sec_write = sec.as_ptr();
-                unsafe { (*sec_write).prev_mem_item = Some(f_success.clone()) };
+                fs_write.next_mem_item = to_be_second;
+                self.child_mem_item = Some(f_success.clone());
+                core::mem::drop(fs_write);
+                Ok(f_success)
             }
-
-            fs_write.next_mem_item = to_be_second;
-            self.child_mem_item = Some(f_success.clone());
+            Err(e) => {
+                // Revert allocation.
+                self.watermark = paddr.1;
+                Err(e)
+            }
         }
-
-        Ok(f_success)
     }
 }

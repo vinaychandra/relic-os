@@ -67,6 +67,7 @@ extern crate paste;
 extern crate static_assertions;
 
 pub mod arch;
+pub mod frame_buffer;
 pub mod logging;
 
 /// Support for loading of Sigma process.
@@ -125,6 +126,7 @@ pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
     let mut bootstrap_info = BootstrapInfo {
         top_level_pml4: 0.into(),
         free_mem_regions: (0.into(), 0.into()),
+        ..Default::default()
     };
     const NONE_INNER: RefCell<Capability> = RefCell::new(Capability::new());
     let root_cpool_inner = CpoolInner {
@@ -169,7 +171,7 @@ pub fn main_bsp(free_regions: Vec<MemoryRegion, heapless::consts::U32>) -> ! {
 
     let root_cpool = root_cpool_stored.as_cpool_mut().unwrap();
     let untyped = root_cpool.lookup((largest_index as u8).into()).unwrap();
-    let (task_cap, _pml4) = load_sigma(
+    let (task_cap, _pml4, _root_cpool) = load_sigma(
         root_cpool,
         untyped.as_untyped_memory_mut().unwrap(),
         bootstrap_info,
@@ -185,7 +187,7 @@ fn load_sigma(
     cpool_cap: CapAccessorMut<'_, Cpool>,
     untyped_cap: CapAccessorMut<'_, UntypedMemory>,
     mut bootstrap_info: BootstrapInfo,
-) -> (StoredCap, StoredCap) {
+) -> (StoredCap, StoredCap, StoredCap) {
     let ramdisk: UStarArchive;
     let binary = {
         unsafe {
@@ -230,10 +232,22 @@ fn load_sigma(
     .into();
     info!(target:"load_sigma", "Stack loaded at {:?}", user_stack_end);
 
+    {
+        info!(target:"load_sigma", "Load VGA Buffers");
+        let bootstrap = frame_buffer::FrameBuffer::new_from_bootboot();
+        bootstrap.bootstrap_and_map(
+            &mut untyped_cap,
+            &mut cpool_cap,
+            &mut pml4_cap,
+            &mut bootstrap_info,
+        );
+    }
+
     info!(target: "load_sigma", "Loading TaskBuffers");
     let buffer_start: u64 = 0x6000_000_0000;
     let (buffer_cap, ind) =
-        StoredCap::base_page_retype_from::<TaskBuffer>(&mut untyped_cap, &mut cpool_cap).unwrap();
+        StoredCap::base_page_retype_from::<TaskBuffer>(&mut untyped_cap, &mut cpool_cap, true)
+            .unwrap();
     info!(target: "load_sigma", "TaskBufferCap is stored at index {}", ind);
     pml4_cap
         .l4_map(
@@ -241,6 +255,7 @@ fn load_sigma(
             &buffer_cap,
             &mut untyped_cap,
             &mut cpool_cap,
+            None,
             MapPermissions::WRITE,
         )
         .unwrap();
@@ -273,5 +288,5 @@ fn load_sigma(
     info!(target: "load_sigma", "Sigma task Cap: {:?}", task_cap);
 
     core::mem::drop(task_cap_write);
-    (task_cap, pml4)
+    (task_cap, pml4, cpool_cap.cap().clone())
 }

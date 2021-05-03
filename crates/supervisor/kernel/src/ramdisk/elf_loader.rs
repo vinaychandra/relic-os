@@ -63,9 +63,17 @@ impl<'a> DefaultElfLoader<'a> {
         page_start_addr: VAddr,
         permissions: MapPermissions,
     ) {
-        let page_cap = StoredCap::base_page_retype_from::<[u8; 4096]>(untyped, cpool).unwrap();
-        pml4.l4_map(page_start_addr, &page_cap.0, untyped, cpool, permissions)
-            .unwrap();
+        let page_cap =
+            StoredCap::base_page_retype_from::<[u8; 4096]>(untyped, cpool, true).unwrap();
+        pml4.l4_map(
+            page_start_addr,
+            &page_cap.0,
+            untyped,
+            cpool,
+            None,
+            permissions,
+        )
+        .unwrap();
         let mut page_raw = page_cap.0.as_base_page_mut().unwrap();
 
         let data = page_raw.page_data_mut_raw();
@@ -81,10 +89,14 @@ impl<'a> DefaultElfLoader<'a> {
         vaddr: VAddr,
         perms: MapPermissions,
     ) -> Result<(), CapabilityErrors> {
-        self.pml4
-            .as_l4_mut()
-            .unwrap()
-            .l4_map(vaddr, cap, &mut self.untyped, &mut self.cpool, perms)
+        self.pml4.as_l4_mut().unwrap().l4_map(
+            vaddr,
+            cap,
+            &mut self.untyped,
+            &mut self.cpool,
+            None,
+            perms,
+        )
     }
 }
 

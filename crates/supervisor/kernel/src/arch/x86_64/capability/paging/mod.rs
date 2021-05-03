@@ -213,13 +213,14 @@ mod tests {
 
         let l4 = StoredCap::pml4_retype_from(&mut untyped, &mut cpool).unwrap();
         let raw_page =
-            StoredCap::base_page_retype_from::<[u8; 10]>(&mut untyped, &mut cpool).unwrap();
+            StoredCap::base_page_retype_from::<[u8; 10]>(&mut untyped, &mut cpool, true).unwrap();
         let mut l4_0 = l4.0.as_l4_mut().unwrap();
         l4_0.l4_map(
             0u64.into(),
             &raw_page.0,
             &mut untyped,
             &mut cpool,
+            None,
             MapPermissions::WRITE,
         )
         .unwrap();
@@ -235,7 +236,7 @@ mod tests {
         ));
 
         let raw_page2 =
-            StoredCap::large_page_retype_from::<[u8; 10]>(&mut untyped, &mut cpool).unwrap();
+            StoredCap::large_page_retype_from::<[u8; 10]>(&mut untyped, &mut cpool, true).unwrap();
 
         let _fail_map = l4_0
             .l4_map(
@@ -243,6 +244,7 @@ mod tests {
                 &raw_page2.0,
                 &mut untyped,
                 &mut cpool,
+                None,
                 MapPermissions::WRITE,
             )
             .unwrap_err();
@@ -254,6 +256,7 @@ mod tests {
                 &raw_page2.0,
                 &mut untyped,
                 &mut cpool,
+                None,
                 MapPermissions::WRITE,
             )
             .unwrap_err();
@@ -264,6 +267,7 @@ mod tests {
             &raw_page2.0,
             &mut untyped,
             &mut cpool,
+            None,
             MapPermissions::WRITE,
         )
         .unwrap();
