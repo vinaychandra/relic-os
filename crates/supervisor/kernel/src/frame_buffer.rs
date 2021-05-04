@@ -147,13 +147,13 @@ impl FrameBuffer {
             }
         }
 
-        bootstrap_info.frame_buffer_paddr = self.ptr.to_paddr().into();
-        bootstrap_info.frame_buffer_vaddr = vga_virt_addr.into();
-        bootstrap_info.frame_buffer_size = self.size;
-        bootstrap_info.frame_buffer_width = self.width;
-        bootstrap_info.frame_buffer_height = self.height;
-        bootstrap_info.frame_buffer_scanline = self.scanline;
-        bootstrap_info.frame_buffer_mode = self.mode;
+        bootstrap_info.fb_info.frame_buffer_paddr = self.ptr.to_paddr().into();
+        bootstrap_info.fb_info.frame_buffer_vaddr = vga_virt_addr.into();
+        bootstrap_info.fb_info.frame_buffer_size = self.size;
+        bootstrap_info.fb_info.frame_buffer_width = self.width;
+        bootstrap_info.fb_info.frame_buffer_height = self.height;
+        bootstrap_info.fb_info.frame_buffer_scanline = self.scanline;
+        bootstrap_info.fb_info.frame_buffer_mode = self.mode;
         info!(target: "graphics", "VGA Bootstrap complete!");
         info!(target: "graphics", "VGA Bootstrap info: {:?}", &self);
     }

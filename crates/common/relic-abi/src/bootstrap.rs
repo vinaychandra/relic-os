@@ -15,6 +15,11 @@ pub struct BootstrapInfo {
     /// Information about TLS.
     pub tls_info: TlsInfo,
 
+    pub fb_info: FrameBufferInfo,
+}
+
+#[derive(Debug, Default)]
+pub struct FrameBufferInfo {
     pub frame_buffer_paddr: u64,
     pub frame_buffer_vaddr: u64,
     pub frame_buffer_size: usize,
