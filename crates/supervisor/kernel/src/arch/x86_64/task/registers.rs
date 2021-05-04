@@ -12,7 +12,7 @@ use x86_64::{
 use crate::capability::TaskStatus;
 
 /// Set of registers in the architecture.
-#[derive(Default, Debug, Getters, Setters)]
+#[derive(Debug, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
 #[repr(C)]
 pub struct Registers {
@@ -45,6 +45,8 @@ pub struct Registers {
 
     /// TCB location.
     fs: u64,
+
+    mmx: [u8; 512],
 }
 
 impl Registers {
@@ -69,10 +71,17 @@ impl Registers {
             rip: 0,
             rflags: 0,
             fs: 0,
+            mmx: [0; 512],
         }
     }
     pub fn switch_to(&mut self, syscall_data: Option<(CapabilityErrors, u64, u64)>) -> TaskStatus {
         user_switching_fn(self, syscall_data)
+    }
+}
+
+impl Default for Registers {
+    fn default() -> Self {
+        Self::empty()
     }
 }
 
@@ -108,6 +117,12 @@ fn user_switching_fn(
     if let Some(data) = syscall {
         let cap_error = data.0.to_u64();
         // Load FsBase for user.
+        unsafe {
+            asm!("
+            FXRSTOR [{0}]
+        ",
+        in(reg) &registers.mmx);
+        }
         FsBase::write(VirtAddr::new(registers.fs));
         unsafe {
             asm!("
@@ -199,6 +214,9 @@ unsafe extern "C" fn syscall_entry_fn_2(
     regs.r15 = r15;
     regs.rflags = rflags;
     regs.fs = old_fs;
+
+    asm!("FXSAVE [{0}]", in(reg) &mut regs.mmx);
+
     REGISTERS.store(regs);
 
     let syscall = SystemCall::from_regs(a, b, c, d, e).ok();
