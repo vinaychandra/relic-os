@@ -12,7 +12,7 @@ use x86_64::{
 use crate::capability::TaskStatus;
 
 /// Set of registers in the architecture.
-#[derive(Debug, Getters, Setters)]
+#[derive(Debug, Getters, Setters, Clone)]
 #[getset(get = "pub", set = "pub")]
 #[repr(C)]
 pub struct Registers {
@@ -149,7 +149,7 @@ fn user_switching_fn(
             out("rdi") _, out("r8") _, out("r9") _, out("r10") _, out("r11") _, out("r12") _,
             out("r13") _, out("r14") _, out("r15") _,
         );
-        *registers = REGISTERS.take();
+        *registers = REGISTERS.clone();
         debug!(target: "user_future", "Thread returned from usermode by making a syscall.");
     }
 
@@ -172,7 +172,7 @@ unsafe extern "C" fn syscall_entry_fn() {
 
 /// This is used to store the register state and provide it back to the kernel stack.
 #[thread_local]
-static REGISTERS: AtomicCell<Registers> = AtomicCell::new(Registers::empty());
+static mut REGISTERS: Registers = Registers::empty();
 
 #[thread_local]
 static NEXT_STATE: AtomicCell<TaskStatus> = AtomicCell::new(TaskStatus::Unknown);
@@ -203,21 +203,18 @@ unsafe extern "C" fn syscall_entry_fn_2(
 
     let old_fs = FsBase::read().as_u64();
     FsBase::write(KernelGsBase::read());
-    let mut regs = Registers::empty();
-    regs.rsp = user_rsp as u64;
-    regs.rbp = user_rbp as u64;
-    regs.rip = user_stored_ip as u64;
-    regs.rbx = rbx;
-    regs.r12 = r12;
-    regs.r13 = r13;
-    regs.r14 = r14;
-    regs.r15 = r15;
-    regs.rflags = rflags;
-    regs.fs = old_fs;
+    REGISTERS.fs = old_fs;
+    REGISTERS.rsp = user_rsp as u64;
+    REGISTERS.rbp = user_rbp as u64;
+    REGISTERS.rip = user_stored_ip as u64;
+    REGISTERS.rbx = rbx;
+    REGISTERS.r12 = r12;
+    REGISTERS.r13 = r13;
+    REGISTERS.r14 = r14;
+    REGISTERS.r15 = r15;
+    REGISTERS.rflags = rflags;
 
-    asm!("FXSAVE [{0}]", in(reg) &mut regs.mmx);
-
-    REGISTERS.store(regs);
+    asm!("FXSAVE [{0}]", in(reg) &mut REGISTERS.mmx);
 
     let syscall = SystemCall::from_regs(a, b, c, d, e).ok();
     NEXT_STATE.store(TaskStatus::SyscalledAndWaiting(syscall));
