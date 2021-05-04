@@ -209,7 +209,9 @@ fn load_sigma(
     info!(target: "load_sigma",
             "Sigma project loaded. Use comand `add-symbol-file ../../x86_64-relic-user/debug/relic-sigma  0x{:x}`",
             loc);
-    let (mut untyped_cap, mut cpool_cap, pml4_cap_stored) = loader.unwrap();
+    let (mut untyped_cap, mut cpool_cap, pml4_cap_stored, tls_info) = loader.unwrap();
+    bootstrap_info.tls_info = tls_info;
+
     let mut pml4_cap = pml4_cap_stored.as_l4_mut().unwrap();
     let pml4 = pml4_cap.cap().clone();
 
@@ -244,7 +246,7 @@ fn load_sigma(
     }
 
     info!(target: "load_sigma", "Loading TaskBuffers");
-    let buffer_start: u64 = 0x6000_000_0000;
+    let buffer_start: u64 = arch::globals::SIGMA_BUFFER_START;
     let (buffer_cap, ind) =
         StoredCap::base_page_retype_from::<TaskBuffer>(&mut untyped_cap, &mut cpool_cap, true)
             .unwrap();

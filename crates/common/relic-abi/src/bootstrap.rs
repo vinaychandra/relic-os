@@ -12,6 +12,9 @@ pub struct BootstrapInfo {
     /// Top level page table for this task.
     pub top_level_pml4: CAddr,
 
+    /// Information about TLS.
+    pub tls_info: TlsInfo,
+
     pub frame_buffer_paddr: u64,
     pub frame_buffer_vaddr: u64,
     pub frame_buffer_size: usize,
@@ -19,6 +22,15 @@ pub struct BootstrapInfo {
     pub frame_buffer_height: usize,
     pub frame_buffer_scanline: usize,
     pub frame_buffer_mode: ColorMode,
+}
+
+#[derive(Debug, Default)]
+pub struct TlsInfo {
+    pub tls_loaded: bool,
+    pub tdata_start: u64,
+    pub tdata_length: u64,
+    pub total_size: u64,
+    pub tls_align: u64,
 }
 
 #[derive(Debug, Clone, Copy)]

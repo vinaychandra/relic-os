@@ -1,7 +1,10 @@
 //! The default ELF loader for the kernel.
 
 use elfloader::{ElfLoader, Flags, LoadableHeaders, Rela, TypeRela64, P64};
-use relic_abi::{bootstrap::BootstrapInfo, cap::CapabilityErrors};
+use relic_abi::{
+    bootstrap::{BootstrapInfo, TlsInfo},
+    cap::CapabilityErrors,
+};
 use relic_utils::align;
 
 use crate::{
@@ -25,6 +28,8 @@ pub struct DefaultElfLoader<'a> {
     /// Contains the last executable region's virtual address.
     #[getset(get_copy = "pub")]
     exe_section_location: VAddr,
+
+    tls_info: TlsInfo,
 }
 
 impl<'a> DefaultElfLoader<'a> {
@@ -34,8 +39,9 @@ impl<'a> DefaultElfLoader<'a> {
         CapAccessorMut<'a, UntypedMemory>,
         CapAccessorMut<'a, Cpool>,
         StoredCap,
+        TlsInfo,
     ) {
-        (self.untyped, self.cpool, self.pml4)
+        (self.untyped, self.cpool, self.pml4, self.tls_info)
     }
 
     pub fn new(
@@ -53,6 +59,7 @@ impl<'a> DefaultElfLoader<'a> {
             cpool,
             untyped,
             pml4: pml4.0,
+            tls_info: Default::default(),
         }
     }
 
@@ -228,7 +235,28 @@ impl<'a> ElfLoader for DefaultElfLoader<'a> {
 
                 Ok(())
             }
-            _ => Err("Unexpected relocation encountered"),
+            r => panic!("Unexpected relocation encountered: {:?}", r),
         }
+    }
+
+    fn tls(
+        &mut self,
+        tdata_start: u64,
+        tdata_length: u64,
+        total_size: u64,
+        align: u64,
+    ) -> Result<(), &'static str> {
+        info!(target: "elf", "Found TLS data: Length: {}, Size: {}, Align: {}", tdata_length, total_size, align);
+        if self.tls_info.tls_loaded {
+            panic!("Cannot handle multiple TLS calls.");
+        }
+        self.tls_info.tls_loaded = true;
+
+        self.tls_info.tdata_start = (self.vbase + tdata_start).into();
+        self.tls_info.tdata_length = tdata_length;
+        self.tls_info.total_size = total_size;
+        self.tls_info.tls_align = align;
+
+        Ok(())
     }
 }

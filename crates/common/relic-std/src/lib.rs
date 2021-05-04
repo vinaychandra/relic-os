@@ -5,6 +5,7 @@
 #![feature(asm)]
 #![feature(crate_visibility_modifier)]
 #![feature(prelude_import)]
+#![feature(thread_local)]
 
 extern crate alloc;
 
@@ -21,13 +22,14 @@ pub mod debug;
 pub mod heap;
 pub mod raw_syscall;
 pub mod syscall_wrapper;
+pub mod tls;
 
 use core::panic::PanicInfo;
 
 use relic_abi::bootstrap::BootstrapInfo;
 use relic_abi::syscall::TaskBuffer;
 
-use crate::heap::init_heap;
+use crate::{heap::init_heap, tls::load_tls};
 
 /// This function is called on panic.
 #[cfg_attr(target_os = "none", panic_handler)]
@@ -35,19 +37,30 @@ fn _panic_handler(_info: &PanicInfo) -> ! {
     loop {}
 }
 
+#[thread_local]
+static mut TEST: u64 = 100;
+
 #[cfg_attr(target_os = "none", no_mangle)]
 pub fn _start() -> ! {
     let bootstrap_info: BootstrapInfo;
+    let tcb_ptr: u64;
     unsafe {
-        let tls: *mut TaskBuffer;
+        let tcb: *mut TaskBuffer;
         asm!(
             "mov {0}, fs:0",
-            out(reg) tls
+            out(reg) tcb
         );
-        bootstrap_info = (&*tls).read_from_task_buffer().unwrap();
+        bootstrap_info = (&*tcb).read_from_task_buffer().unwrap();
+        tcb_ptr = tcb as _;
     }
 
     init_heap(&bootstrap_info);
+    load_tls(&bootstrap_info, tcb_ptr);
+
+    unsafe {
+        let a = TEST;
+        TEST = a + 1;
+    }
 
     let _a = Box::new(10);
     loop {}

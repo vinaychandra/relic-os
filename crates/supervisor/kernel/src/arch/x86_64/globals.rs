@@ -25,3 +25,7 @@ pub const KERNEL_STACK_START: usize = 0xFFFF_FF80_0000_0000;
 
 /// Basic page length in x86_64 (4 KiB).
 pub const BASE_PAGE_LENGTH: usize = 4096; // 4 KiB
+
+pub const SIGMA_TLS_IMAGE_START: u64 = 0x7000_000_0000;
+pub const SIGMA_BUFFER_START: u64 = 0x6000_000_0000;
+pub const SIGMA_VGA_START: u64 = 0x5000_000_0000;

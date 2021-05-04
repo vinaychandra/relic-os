@@ -7,5 +7,6 @@ description = "Relic OS - STD Package"
 
 [dependencies]
 relic-abi = { path = "../relic-abi" }
+relic-utils = { path = "../relic-utils" }
 
 buddy_system_allocator = { git = "https://github.com/rcore-os/buddy_system_allocator", rev = "6586514", features = ["const_fn"] }

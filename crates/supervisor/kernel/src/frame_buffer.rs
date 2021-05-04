@@ -53,7 +53,7 @@ impl FrameBuffer {
         info!(target: "graphics", "Bootstrap VGA frame buffer");
         info!(target: "graphics", "Size of frame buffer: {}", self.size);
 
-        let vga_virt_addr: VAddr = 0x5000_000_0000usize.into();
+        let vga_virt_addr: VAddr = crate::arch::globals::SIGMA_VGA_START.into();
 
         let untyped_device = unsafe { UntypedMemory::bootstrap(self.ptr, self.size, true) };
         let cpool_location = cpool_to_store.get_free_index().unwrap();
