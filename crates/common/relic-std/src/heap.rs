@@ -6,9 +6,9 @@ use relic_abi::bootstrap::BootstrapInfo;
 use crate::syscall_wrapper;
 
 #[cfg_attr(target_os = "none", global_allocator)]
-pub static HEAP: LockedHeapWithRescue<22> = LockedHeapWithRescue::new(expand_heap);
+pub static HEAP: LockedHeapWithRescue<25> = LockedHeapWithRescue::new(expand_heap);
 
-fn expand_heap(_heap: &mut buddy_system_allocator::Heap<22>, _layout: &Layout) {
+fn expand_heap(_heap: &mut buddy_system_allocator::Heap<25>, _layout: &Layout) {
     todo!("Heap expansion needs to be implemetned.")
 }
 
@@ -24,10 +24,12 @@ crate fn init_heap(bootstrap_info: &BootstrapInfo) {
     let start_addr: u8 = bootstrap_info.free_mem_regions.0 .0[0];
     let end_addr: u8 = bootstrap_info.free_mem_regions.1 .0[0];
 
+    const NUM_PAGES: usize = 5;
+
     let mut target_addr = None;
     for addr in start_addr..=end_addr {
         let free_sapce = syscall_wrapper::get_free_space(addr.into()).unwrap();
-        if free_sapce.1 > 0x20_0000 {
+        if free_sapce.1 > NUM_PAGES * 0x20_0000 {
             target_addr = Some(addr);
             break;
         }
@@ -39,14 +41,17 @@ crate fn init_heap(bootstrap_info: &BootstrapInfo) {
 
     //TODO: This can fail if available space is exactly enough and system needs more space to create
     // more paging structures.
-    let raw_page = syscall_wrapper::retype_raw_page(target_addr.unwrap().into(), 1).unwrap();
-    syscall_wrapper::map_raw_page(
-        target_addr.unwrap().into(),
-        bootstrap_info.top_level_pml4,
-        HEAP_LOCATION,
-        raw_page,
-    )
-    .unwrap();
+    // Map 10MiB of heap.
+    for i in 0..NUM_PAGES {
+        let raw_page = syscall_wrapper::retype_raw_page(target_addr.unwrap().into(), 1).unwrap();
+        syscall_wrapper::map_raw_page(
+            target_addr.unwrap().into(),
+            bootstrap_info.top_level_pml4,
+            HEAP_LOCATION + (i as u64 * 0x20_0000),
+            raw_page,
+        )
+        .unwrap();
+    }
 
-    unsafe { HEAP.lock().init(HEAP_LOCATION as _, 0x20_0000) };
+    unsafe { HEAP.lock().init(HEAP_LOCATION as _, 0x20_0000 * NUM_PAGES) };
 }

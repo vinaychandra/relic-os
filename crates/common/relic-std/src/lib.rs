@@ -9,10 +9,14 @@
 
 extern crate alloc;
 
-mod prelude {
+pub mod prelude {
     pub use alloc::prelude::v1::*;
+    pub use alloc::vec;
     pub use core::prelude::v1::*;
 }
+
+pub use alloc::*;
+pub use core::*;
 
 #[allow(unused_imports)]
 #[prelude_import]
@@ -37,9 +41,6 @@ fn _panic_handler(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-#[thread_local]
-static mut TEST: u64 = 100;
-
 #[cfg_attr(target_os = "none", no_mangle)]
 pub fn _start() -> ! {
     let bootstrap_info: BootstrapInfo;
@@ -57,11 +58,6 @@ pub fn _start() -> ! {
     init_heap(&bootstrap_info);
     load_tls(&bootstrap_info, tcb_ptr);
 
-    unsafe {
-        let a = TEST;
-        TEST = a + 1;
-    }
-
-    let _a = Box::new(10);
+    unsafe { asm!("call user_main", in("rdi") &bootstrap_info) };
     loop {}
 }

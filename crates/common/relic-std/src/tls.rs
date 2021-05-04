@@ -5,6 +5,10 @@ use crate::syscall_wrapper;
 crate fn load_tls(bootstrap_info: &BootstrapInfo, tcb_ptr: u64) {
     let tls_info = &bootstrap_info.tls_info;
 
+    if !tls_info.tls_loaded {
+        return;
+    }
+
     let num_pages = relic_utils::align::align_up(tls_info.total_size as usize, 4096 as _) / 4096;
 
     let start_addr: u8 = bootstrap_info.free_mem_regions.0 .0[0];

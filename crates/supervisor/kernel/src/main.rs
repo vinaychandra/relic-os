@@ -222,10 +222,12 @@ fn load_sigma(
         DefaultElfLoader::map_empty_page(
             &mut pml4_cap,
             &mut untyped_cap,
+            None,
             &mut cpool_cap,
             VAddr::new(user_stack_start + (BASE_PAGE_LENGTH * page_index) as u64),
             MapPermissions::WRITE,
         )
+        .unwrap();
     }
     let user_stack_end: VAddr = align::align_down(
         user_stack_start + num_pages as u64 * BASE_PAGE_LENGTH as u64 - 1,

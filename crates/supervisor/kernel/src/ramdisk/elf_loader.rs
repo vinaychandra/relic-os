@@ -25,6 +25,8 @@ pub struct DefaultElfLoader<'a> {
     /// Get the root page table capability.
     pml4: StoredCap,
 
+    current_user_data_pool: StoredCap,
+
     /// Contains the last executable region's virtual address.
     #[getset(get_copy = "pub")]
     exe_section_location: VAddr,
@@ -53,6 +55,8 @@ impl<'a> DefaultElfLoader<'a> {
         let pml4 = StoredCap::pml4_retype_from(&mut untyped, &mut cpool).unwrap();
         bootstrap_info.top_level_pml4 = (pml4.1 as u8).into();
 
+        let user_data_pool = StoredCap::cpool_retype_from(&mut untyped, &mut cpool).unwrap();
+
         DefaultElfLoader {
             vbase,
             exe_section_location: 1u64.into(),
@@ -60,50 +64,36 @@ impl<'a> DefaultElfLoader<'a> {
             untyped,
             pml4: pml4.0,
             tls_info: Default::default(),
+            current_user_data_pool: user_data_pool.0,
         }
     }
 
     pub fn map_empty_page(
         pml4: &mut CapAccessorMut<'_, L4>,
         untyped: &mut CapAccessorMut<'_, UntypedMemory>,
-        cpool: &mut CapAccessorMut<'_, Cpool>,
+        search_cpool: Option<&mut CapAccessorMut<'_, Cpool>>,
+        store_cpool: &mut CapAccessorMut<'_, Cpool>,
         page_start_addr: VAddr,
         permissions: MapPermissions,
-    ) {
-        let page_cap =
-            StoredCap::base_page_retype_from::<[u8; 4096]>(untyped, cpool, true).unwrap();
+    ) -> Result<(), CapabilityErrors> {
+        let page_cap = StoredCap::base_page_retype_from::<[u8; 4096]>(untyped, store_cpool, true)?;
         pml4.l4_map(
             page_start_addr,
             &page_cap.0,
             untyped,
-            cpool,
-            None,
+            store_cpool,
+            search_cpool,
             permissions,
-        )
-        .unwrap();
+        )?;
+
         let mut page_raw = page_cap.0.as_base_page_mut().unwrap();
 
         let data = page_raw.page_data_mut_raw();
         for i in 0..data.len() {
             data[i] = 0;
         }
-    }
 
-    /// Map a capability at the target address.
-    pub fn map_cap(
-        &mut self,
-        cap: &StoredCap,
-        vaddr: VAddr,
-        perms: MapPermissions,
-    ) -> Result<(), CapabilityErrors> {
-        self.pml4.as_l4_mut().unwrap().l4_map(
-            vaddr,
-            cap,
-            &mut self.untyped,
-            &mut self.cpool,
-            None,
-            perms,
-        )
+        Ok(())
     }
 }
 
@@ -151,14 +141,32 @@ impl<'a> ElfLoader for DefaultElfLoader<'a> {
                 virt_addr_to_load_at_page_aligned.into();
 
             for page_count in 0..(total_size / globals::BASE_PAGE_LENGTH) {
-                Self::map_empty_page(
+                let r = Self::map_empty_page(
                     &mut self.pml4.as_l4_mut().unwrap(),
                     &mut self.untyped,
-                    &mut self.cpool,
+                    Some(&mut self.cpool),
+                    &mut self.current_user_data_pool.as_cpool_mut().unwrap(),
                     virt_addr_to_load_at_page_aligned_vaddr
                         + page_count * globals::BASE_PAGE_LENGTH,
                     target_permissions,
                 );
+                if r == Err(CapabilityErrors::CapabilitySlotsFull) {
+                    let user_data_pool =
+                        StoredCap::cpool_retype_from(&mut self.untyped, &mut self.cpool).unwrap();
+                    self.current_user_data_pool = user_data_pool.0;
+                    Self::map_empty_page(
+                        &mut self.pml4.as_l4_mut().unwrap(),
+                        &mut self.untyped,
+                        Some(&mut self.cpool),
+                        &mut self.current_user_data_pool.as_cpool_mut().unwrap(),
+                        virt_addr_to_load_at_page_aligned_vaddr
+                            + page_count * globals::BASE_PAGE_LENGTH,
+                        target_permissions,
+                    )
+                    .unwrap();
+                } else if r.is_err() {
+                    r.unwrap();
+                }
             }
 
             info!(
