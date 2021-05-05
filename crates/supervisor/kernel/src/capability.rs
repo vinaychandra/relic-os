@@ -168,6 +168,23 @@ impl Capability {
     }
 }
 
+impl StoredCap {
+    pub fn insert_next_mem_item(&self, next_item: &StoredCap) {
+        unsafe {
+            // Update next ptrs.
+            let current_next = (*self.as_ptr()).next_mem_item.clone();
+            (*next_item.as_ptr()).next_mem_item = current_next.clone();
+            (*self.as_ptr()).next_mem_item = Some(next_item.clone());
+
+            // Update prev ptrs
+            (*next_item.as_ptr()).prev_mem_item = Some(self.clone());
+            if let Some(current_next) = current_next {
+                (*current_next.as_ptr()).prev_mem_item = Some(next_item.clone());
+            }
+        }
+    }
+}
+
 /**
 A faster way to read capabilities.
 Because the capability objects are present in a refcell and then behind

@@ -379,7 +379,8 @@ mod tests {
         };
         let mut root_cpool = Cpool {
             linked_task: None,
-            data: unsafe {
+            is_derived: false,
+            cpool_data: unsafe {
                 Boxed::new(PAddrGlobal::new(
                     &root_cpool_inner as *const CpoolInner as u64,
                 ))

@@ -8,6 +8,8 @@ pub struct L4 {
     pub page_data: Boxed<PML4Table>,
     pub child_paging_item: Option<StoredCap>,
     pub linked_task: Option<StoredCap>,
+
+    is_derived: bool,
 }
 
 impl L4 {
@@ -22,6 +24,7 @@ impl L4 {
         }
 
         Self {
+            is_derived: false,
             linked_task: None,
             page_data: boxed,
             child_paging_item: None,
@@ -230,5 +233,38 @@ impl CapAccessorMut<'_, L4> {
             &mut raw_page.as_base_page_mut().unwrap(),
             Some(target_perms),
         )
+    }
+}
+
+impl StoredCap {
+    /**
+    Copy an l4 into the provided cpool.
+    */
+    pub fn l4_copy(
+        source_l4: &StoredCap,
+        cpool_to_store_in: &StoredCap,
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
+        let l4_accessor = source_l4.as_l4_mut()?;
+        let new_l4 = L4 {
+            child_paging_item: None,
+            is_derived: true,
+            linked_task: None,
+            page_data: unsafe { l4_accessor.page_data.unsafe_clone() },
+        };
+        core::mem::drop(l4_accessor);
+
+        let new_l4_cap = Capability {
+            capability_data: CapabilityEnum::L4(new_l4),
+            ..Default::default()
+        };
+
+        let stored_copy;
+        let mut cpool = cpool_to_store_in.as_cpool_mut()?;
+        let free_index = cpool.get_free_index()?;
+        let result = cpool.write_to_if_empty(free_index, new_l4_cap)?;
+        stored_copy = (result, free_index);
+
+        source_l4.insert_next_mem_item(&stored_copy.0);
+        Ok(stored_copy)
     }
 }

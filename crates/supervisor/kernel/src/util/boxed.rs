@@ -10,7 +10,7 @@ An owned pointer structure similar to Box but
 without deallocate support.
 */
 #[repr(transparent)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Boxed<T> {
     inner: NonNull<T>,
 }
@@ -37,6 +37,10 @@ impl<T> Boxed<T> {
 
     fn inner_ptr(&self) -> *mut T {
         self.inner.as_ptr()
+    }
+
+    pub unsafe fn unsafe_clone(&self) -> Self {
+        Self { inner: self.inner }
     }
 }
 

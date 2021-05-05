@@ -6,6 +6,9 @@ contained within the cpool. It is a fixed length array containig
 [`RefCell<Capability>`]. The cpool owns the memory in which actual capability
 objects are stored.
 */
+use core::ops::Deref;
+use std::ops::DerefMut;
+
 use crate::util::boxed::Boxed;
 use relic_abi::{cap::CapabilityErrors, prelude::CAddr};
 
@@ -21,12 +24,19 @@ pub struct Cpool {
     /**
     Owned store of capability objects.
     */
-    pub data: Boxed<CpoolInner>,
+    pub cpool_data: Boxed<CpoolInner>,
     /**
     A cpool can be linked to a task. This happens when
     cpool is the root cpool for a thread.
     */
     pub linked_task: Option<StoredCap>,
+
+    /**
+    A flag set in the case that this is a derived cpool.
+    In that case, data is not actually owned by this object
+    but is owned by a parent cpool.
+    */
+    pub is_derived: bool,
 }
 
 /**
@@ -40,13 +50,27 @@ pub struct CpoolInner {
 // assert the size of cpool inner.
 assert_eq_size!([u8; 4096 * 4], CpoolInner);
 
-impl Cpool {
+impl Deref for Cpool {
+    type Target = CpoolInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.cpool_data
+    }
+}
+
+impl DerefMut for Cpool {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.cpool_data
+    }
+}
+
+impl CpoolInner {
     /**
     Get a free index in the cpool. This will return a [`CapabilityErrors::CapabilitySlotsFull`]
     if there are no free indexes to be found.
     */
     pub fn get_free_index(&self) -> Result<usize, CapabilityErrors> {
-        for val in self.data.unsafe_data.iter().enumerate() {
+        for val in self.unsafe_data.iter().enumerate() {
             if let Ok(borrow) = &val.1.try_borrow() {
                 if let CapabilityEnum::EmptyCap { .. } = borrow.capability_data {
                     return Ok(val.0);
@@ -66,10 +90,10 @@ impl Cpool {
             None
         } else if caddr.1 == 1 {
             let index = caddr.0[0];
-            Some(unsafe { UnsafeRef::from_raw(&self.data.unsafe_data[index as usize]) })
+            Some(unsafe { UnsafeRef::from_raw(&self.unsafe_data[index as usize]) })
         } else {
             let cur_lookup_index = caddr.0[0];
-            let next_lookup_cpool = &self.data.unsafe_data[cur_lookup_index as usize];
+            let next_lookup_cpool = &self.unsafe_data[cur_lookup_index as usize];
             if let CapabilityEnum::Cpool(pool) = &next_lookup_cpool.borrow().capability_data {
                 let next_caddr = caddr << 1;
                 pool.lookup(next_caddr)
@@ -120,8 +144,7 @@ impl Cpool {
         }
 
         let mut partial_search = false;
-        self.data
-            .unsafe_data
+        self.unsafe_data
             .iter()
             .find_map(|val| {
                 let cap: StoredCap = val.into();
@@ -173,7 +196,7 @@ impl Cpool {
         index: usize,
         cap: Capability,
     ) -> Result<StoredCap, CapabilityErrors> {
-        let data_at_index = &mut self.data.unsafe_data[index];
+        let data_at_index = &mut self.unsafe_data[index];
         if let CapabilityEnum::EmptyCap = &data_at_index.get_mut().capability_data {
             *data_at_index = RefCell::new(cap);
             Ok(unsafe { UnsafeRef::from_raw(data_at_index) })
@@ -212,8 +235,9 @@ impl StoredCap {
                 cpool_location_to_store,
                 Capability {
                     capability_data: CapabilityEnum::Cpool(Cpool {
-                        data: boxed,
+                        cpool_data: boxed,
                         linked_task: None,
+                        is_derived: false,
                     }),
                     ..Default::default()
                 },
@@ -224,5 +248,45 @@ impl StoredCap {
         })?;
 
         Ok((location, result_index))
+    }
+
+    /**
+    Copy a given cpool in to the provided cpool if any. If `None`, the copy
+    will be done into the source cpool.
+
+    Returns the Stored capability and the target index.
+    */
+    pub fn cpool_copy(
+        source_cpool: &StoredCap,
+        cpool_to_store_in: Option<&StoredCap>,
+    ) -> Result<(StoredCap, usize), CapabilityErrors> {
+        let source_pool_accessor = source_cpool.as_cpool_mut()?;
+        let new_cpool = Cpool {
+            cpool_data: unsafe { source_pool_accessor.cpool_data.unsafe_clone() },
+            is_derived: true,
+            linked_task: None,
+        };
+        core::mem::drop(source_pool_accessor);
+
+        let new_cpool_cap = Capability {
+            capability_data: CapabilityEnum::Cpool(new_cpool),
+            ..Default::default()
+        };
+
+        let stored_copy;
+        if let Some(cpool_to_store) = cpool_to_store_in {
+            let mut cpool = cpool_to_store.as_cpool_mut()?;
+            let free_index = cpool.get_free_index()?;
+            let result = cpool.write_to_if_empty(free_index, new_cpool_cap)?;
+            stored_copy = (result, free_index);
+        } else {
+            let mut cpool = source_cpool.as_cpool_mut()?;
+            let free_index = cpool.get_free_index()?;
+            let result = cpool.write_to_if_empty(free_index, new_cpool_cap)?;
+            stored_copy = (result, free_index);
+        }
+
+        source_cpool.insert_next_mem_item(&stored_copy.0);
+        Ok(stored_copy)
     }
 }
