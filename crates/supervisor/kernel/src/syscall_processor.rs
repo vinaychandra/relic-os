@@ -113,7 +113,7 @@ pub fn process_syscall(
                 let mut untyped = untyped_op.as_untyped_memory_mut()?;
                 let perms = MapPermissions::WRITE | MapPermissions::EXECUTE;
 
-                let mut top_level_table_mut = top_level_table.as_l4_mut().unwrap();
+                let mut top_level_table_mut = top_level_table.as_l4_mut()?;
                 top_level_table_mut.l4_map(vaddr, &raw_page, &mut untyped, &mut cpool, None, perms)
             };
             let data = func().err().unwrap_or(CapabilityErrors::None);

@@ -63,37 +63,96 @@ impl SetDefault for TaskBuffer {
 
 /// List of system calls supported by the kernel.
 #[derive(Debug, Clone)]
-#[repr(C)]
+#[repr(C, u64)] // 64bit discriminant
 #[non_exhaustive]
 pub enum SystemCall {
-    /// No system call. This should not be invoked.
+    /**
+    No system call. This should not be invoked.
+    */
     None,
-    /// Yield system call. Doesn't need a capability.
-    /// Used to give up the current timeslice.
+    /**
+    Yield system call. Doesn't need a capability.
+    Used to give up the current timeslice.
+    */
     Yield,
-    /// Print some string from the payload.
+    /**
+    Print some string from the payload.
+    */
     Print,
 
-    /// Given a caddr, get the total size and free size of the
-    /// untyped capabilty space.
+    /**
+    Given a caddr, get the total size and free size of the
+    untyped capabilty space.
+    */
     UntypedTotalFree(CAddr),
 
-    /// Create a new raw page capability using the provided
-    /// untyped memory and store the capability in the current cpool.
-    /// The value of size is the 'type' of page. This is architecture
-    /// dependant. Example: 0 => 4KiB, 1 => 2MiB, 2 => 1GiB.
-    /// Returns the new CAddr.
+    /**
+    Copy the provided capability into the provided cpool.
+    Returns the new CAddr.
+    */
+    CopyCapability {
+        address: CAddr,
+        cpool_to_store_in: CAddr,
+    },
+
+    /**
+    Create a new raw page capability using the provided
+    untyped memory and store the capability in the current cpool.
+    The value of size is the 'type' of page. This is architecture
+    dependant. Example: 0 => 4KiB, 1 => 2MiB, 2 => 1GiB.
+    Returns the new CAddr.
+    */
     RawPageRetype { untyped_memory: CAddr, size: u64 },
-    /// Map a given page into the provided address.
+    /**
+    Map a given page into the provided address.
+    */
     RawPageMap {
-        /// To map raw pages, we might need more pages for inner tables.
+        /**
+        To map raw pages, we might need more pages for inner tables.
+        */
         untyped_memory: CAddr,
-        /// The top level table into which the mapping should be done.
+        /**
+        The top level table into which the mapping should be done.
+        */
         top_level_table: CAddr,
-        /// The address where the mapping should be done to.
+        /**
+        The address where the mapping should be done to.
+        */
         vaddr: u64,
-        /// The raw page capability for the request.
+        /**
+        The raw page capability for the request.
+        */
         raw_page: CAddr,
+    },
+
+    /**
+    Create a new cpool capability using the provided
+    untyped memory and store the capability in the current cpool.
+    Returns the new CAddr.
+    */
+    CpoolRetype { untyped_memory: CAddr },
+
+    /**
+    Create a new thread and immediately schedule it.
+    Returns the CAddr for the created task address.
+    */
+    ThreadCreateAndSchedule {
+        /**
+        Memory is needed to create task descriptors and buffers.
+        */
+        untyped_memory: CAddr,
+        /**
+        Address of cpool to link to the created task.
+        */
+        cpool: CAddr,
+        /**
+        Top level page table to link to the created task.
+        */
+        top_level_table: CAddr,
+        /**
+        The virtual address at which the thread has to be created.
+        */
+        vaddr: u64,
     },
 }
 
@@ -103,53 +162,27 @@ impl Default for SystemCall {
     }
 }
 
+assert_eq_size!((u64, u64, u64, u64, u64), SystemCall);
+
 impl SystemCall {
     /// Convert the system call representation into a tuple so that
     /// it can be stored directly in registers instead of memory.
     pub fn as_regs(&self) -> Result<(u64, u64, u64, u64, u64), ()> {
-        match self {
-            SystemCall::Yield => Ok((1, 0, 0, 0, 0)),
-            SystemCall::Print => Ok((2, 0, 0, 0, 0)),
-            SystemCall::UntypedTotalFree(a) => Ok((3, a.into_u64(), 0, 0, 0)),
-            SystemCall::RawPageRetype {
-                untyped_memory: a,
-                size: b,
-            } => Ok((100, a.into_u64(), *b, 0, 0)),
-            SystemCall::RawPageMap {
-                untyped_memory,
-                top_level_table,
-                vaddr,
-                raw_page,
-            } => Ok((
-                101,
-                untyped_memory.into_u64(),
-                top_level_table.into_u64(),
-                *vaddr,
-                raw_page.into_u64(),
-            )),
-            _ => Err(()),
+        unsafe {
+            let value: (u64, u64, u64, u64, u64) = core::mem::transmute_copy(&self);
+            Ok(value)
         }
     }
 
     /// Convert the in-register representtaion to the system call representation
     /// Reverse of [`Self::as_regs`].
-    pub fn from_regs(a: u64, b: u64, c: u64, d: u64, e: u64) -> Result<SystemCall, ()> {
-        match a {
-            1 => Ok(SystemCall::Yield),
-            2 => Ok(SystemCall::Print),
-            3 => Ok(SystemCall::UntypedTotalFree(CAddr::from_u64(b))),
-            100 => Ok(SystemCall::RawPageRetype {
-                untyped_memory: CAddr::from_u64(b),
-                size: c as u64,
-            }),
-            101 => Ok(SystemCall::RawPageMap {
-                untyped_memory: CAddr::from_u64(b),
-                top_level_table: CAddr::from_u64(c),
-                vaddr: d,
-                raw_page: CAddr::from_u64(e),
-            }),
-            _ => Err(()),
+    pub fn from_regs(index: u64, a: u64, b: u64, c: u64, d: u64) -> Result<SystemCall, ()> {
+        if index as usize >= core::mem::variant_count::<SystemCall>() {
+            return Err(());
         }
+
+        let val: SystemCall = unsafe { core::mem::transmute((index, a, b, c, d)) };
+        return Ok(val);
     }
 }
 

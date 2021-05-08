@@ -37,7 +37,7 @@ pub enum CapabilityErrors {
     TaskBufferNotFound,
 
     /// Unknown cap error.
-    Unknown, // Keep this last, otherwise TryFrom will fail.
+    Unknown,
 }
 
 impl CapabilityErrors {
@@ -51,7 +51,7 @@ impl TryFrom<u64> for CapabilityErrors {
     type Error = ();
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
-        if value > CapabilityErrors::Unknown as u64 {
+        if value as usize >= core::mem::variant_count::<CapabilityErrors>() {
             return Err(());
         }
 

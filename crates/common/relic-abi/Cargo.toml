@@ -6,3 +6,4 @@ edition = "2018"
 description = "Relic OS - ABI Package"
 
 [dependencies]
+static_assertions = "1.1.0"
