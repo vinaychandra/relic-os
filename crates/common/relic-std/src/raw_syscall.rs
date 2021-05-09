@@ -16,7 +16,10 @@ pub fn make_syscall(syscall: &SystemCall) -> Result<(u64, u64), CapabilityErrors
         #[cfg(target_feature = "sse")]
         {
             asm!(
-                "syscall",
+                "
+                push rbx
+                syscall
+                pop rbx",
                 inout("rdi") regs.0 => a,
                 in("rsi") regs.1,
                 in("rdx") regs.2,
@@ -35,7 +38,9 @@ pub fn make_syscall(syscall: &SystemCall) -> Result<(u64, u64), CapabilityErrors
         #[cfg(not(target_feature = "sse"))]
         {
             asm!(
-                "syscall",
+                "push rbx
+                syscall
+                pop rbx",
                 inout("rdi") regs.0 => a,
                 in("rsi") regs.1,
                 in("rdx") regs.2,

@@ -131,7 +131,7 @@ fn user_switching_fn(
             sysretq
         ",
         in("rdi") data.1, in("rsi") registers.rbp, in("rax") cap_error,
-        in("rbx") registers.rbx, in("rcx") registers.rip, in("rdx") registers.rsp,
+        in("rcx") registers.rip, in("rdx") registers.rsp,
         in("r8") data.2, in("r9") registers.r9, in("r10") registers.r10,
         in("r11") registers.rflags, in("r12") registers.r12, in("r13") registers.r13,
         in("r14") registers.r14, in("r15") registers.r15)
@@ -145,7 +145,7 @@ fn user_switching_fn(
             "user_fn_resume_point:
             nop
             ",
-            out("rax") _, out("rbx") _, out("rcx") _, out("rdx") _, out("rsi") _,
+            out("rax") _, out("rcx") _, out("rdx") _, out("rsi") _,
             out("rdi") _, out("r8") _, out("r9") _, out("r10") _, out("r11") _, out("r12") _,
             out("r13") _, out("r14") _, out("r15") _,
         );
@@ -190,7 +190,6 @@ unsafe extern "C" fn syscall_entry_fn_2(
     // at a later point in time.
     let user_rsp: *const ();
     let user_rbp: *const ();
-    let rbx: u64;
     let r12: u64;
     let r13: u64;
     let r14: u64;
@@ -198,7 +197,7 @@ unsafe extern "C" fn syscall_entry_fn_2(
     let rflags: u64;
     asm!("nop", 
         out("r10") user_rsp, out("rax") user_rbp,
-        out("rbx") rbx, out("r12") r12, out("r13") r13,
+        out("r12") r12, out("r13") r13,
         out("r14") r14, out("r15") r15, out("r11") rflags);
 
     let old_fs = FsBase::read().as_u64();
@@ -207,7 +206,6 @@ unsafe extern "C" fn syscall_entry_fn_2(
     REGISTERS.rsp = user_rsp as u64;
     REGISTERS.rbp = user_rbp as u64;
     REGISTERS.rip = user_stored_ip as u64;
-    REGISTERS.rbx = rbx;
     REGISTERS.r12 = r12;
     REGISTERS.r13 = r13;
     REGISTERS.r14 = r14;
